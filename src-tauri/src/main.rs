@@ -152,7 +152,8 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         return window.set_focus().map_err(|e| e.to_string());
     }
-    WebviewWindowBuilder::new(
+
+    let mut builder = WebviewWindowBuilder::new(
         app,
         "settings",
         WebviewUrl::App("settings.html".into()),
@@ -160,14 +161,35 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     .title("SpeakiRPG Settings")
     .inner_size(420.0, 540.0)
     .resizable(false)
-    .build()
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    .center();
+
+    if let Some(parent) = app.get_webview_window("main") {
+        builder = builder
+            .parent(&parent)
+            .map_err(|e| e.to_string())?;
+    }
+
+    builder.build().map(|_| ()).map_err(|e| e.to_string())
+}
+
+// window create must run on the main thread; global shortcuts and some invoke
+// paths call in from other threads and will deadlock on WebviewWindowBuilder::build
+fn schedule_open_settings(app: &AppHandle) {
+    let app = app.clone();
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || {
+        if let Err(err) = open_settings_window(&handle) {
+            eprintln!("failed to open settings window: {err}");
+        }
+    }) {
+        eprintln!("failed to schedule settings window: {err}");
+    }
 }
 
 #[tauri::command]
 fn open_settings(app: AppHandle) -> Result<(), String> {
-    open_settings_window(&app)
+    schedule_open_settings(&app);
+    Ok(())
 }
 
 fn load_mod_scripts(app: &AppHandle) -> String {
@@ -254,7 +276,7 @@ fn menu_activity(start_ms: u64) -> activity::Activity<'static> {
             activity::Assets::new()
                 .large_image("logo")
                 .large_text("Ogey")
-                .small_image("logo")
+                .small_image("logo_small")
                 .small_text("Rrat"),
         )
 }
@@ -285,7 +307,7 @@ fn stats_activity(stats: &PageStats, start_ms: u64) -> activity::Activity<'stati
             activity::Assets::new()
                 .large_image("logo")
                 .large_text("Speaki RPG")
-                .small_image("logo")
+                .small_image("logo_small")
                 .small_text("RPG"),
         )
         .buttons(vec![
@@ -420,11 +442,7 @@ fn handle_shortcut(app: &AppHandle, action: ShortcutAction) {
                 if snapshot.translate_enabled { "on" } else { "off" }
             );
         }
-        ShortcutAction::OpenSettings => {
-            if let Err(err) = open_settings_window(app) {
-                eprintln!("failed to open settings window: {err}");
-            }
-        }
+        ShortcutAction::OpenSettings => schedule_open_settings(app),
     }
 }
 

@@ -79,7 +79,6 @@
   }
 
   const HANGUL = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/;
-  // game chat: .sr-chatbox__log > .sr-chatbox__row > .sr-chatbox__body-text
   const CHAT_LOG_SELECTOR = '.sr-chatbox__log';
   const MAX_TEXT_LENGTH = 450; // gtx GET; long strings won't fit the URL
 
@@ -87,6 +86,7 @@
     if (document.getElementById('sr-style')) return;
     const style = document.createElement('style');
     style.id = 'sr-style';
+    // 2147483647: game overlays sat above z-index 9999
     style.textContent = `
       .sr-translate-original { opacity: 0.55; font-size: 0.92em; }
       #sr-settings-btn {
@@ -95,7 +95,7 @@
         display: flex; align-items: center; justify-content: center;
         border: 1px solid rgba(255,255,255,0.25); border-radius: 6px;
         background: rgba(20,24,32,0.6); color: rgba(255,255,255,0.75);
-        opacity: 0.35; cursor: pointer; z-index: 9999;
+        opacity: 0.35; cursor: pointer; z-index: 2147483647;
       }
       #sr-settings-btn:hover { opacity: 1; }
     `;
@@ -178,19 +178,37 @@
   const GEAR_SVG =
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>';
 
-  function mountSettingsButton() {
-    if (!document.body || document.getElementById('sr-settings-btn')) return;
+  function mountSettingsButton(root) {
     const btn = document.createElement('button');
     btn.id = 'sr-settings-btn';
     btn.type = 'button';
     btn.title = 'SpeakiRPG settings (Ctrl+Shift+S)';
     btn.innerHTML = GEAR_SVG;
     btn.addEventListener('click', () => {
+      if (!window.__TAURI__) return;
       window.__TAURI__.core
         .invoke('open_settings')
         .catch((err) => console.error('[SpeakiRPG] open_settings failed:', err));
     });
-    document.body.appendChild(btn);
+    root.appendChild(btn);
+  }
+
+  // init script can run before body exists; SPA re-renders can drop the button
+  function ensureSettingsButton() {
+    if (document.getElementById('sr-settings-btn')) return;
+    const root = document.body || document.documentElement;
+    if (!root) {
+      document.addEventListener('DOMContentLoaded', ensureSettingsButton, { once: true });
+      window.addEventListener('load', ensureSettingsButton, { once: true });
+      return;
+    }
+    mountSettingsButton(root);
+  }
+
+  // remount gear on the same 2s poll as observeChat if the DOM was wiped
+  function ensureUi() {
+    ensureSettingsButton();
+    setTimeout(ensureUi, 2000);
   }
 
   onTauriReady(() => {
@@ -207,12 +225,10 @@
       setInterval(() => pushStats(false), 5 * 60 * 1000);
     }, 30 * 1000);
 
-    injectStyles();
-    mountSettingsButton();
-    // init script can run before body exists
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', mountSettingsButton);
-    }
     observeChat();
   });
+
+  // gear/styles don't need __TAURI__; IPC listeners wait for it in onTauriReady
+  injectStyles();
+  ensureUi();
 })();

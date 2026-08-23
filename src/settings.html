@@ -228,9 +228,15 @@
         });
 
         // keep in sync with hotkey toggles happening in the game window
-        window.__TAURI__.event.listen('settings-changed', refresh);
+        function onTauriReady(fn) {
+            if (window.__TAURI__) fn();
+            else setTimeout(() => onTauriReady(fn), 50);
+        }
 
-        refresh();
+        onTauriReady(() => {
+            window.__TAURI__.event.listen('settings-changed', refresh);
+            refresh();
+        });
     </script>
 </body>
 

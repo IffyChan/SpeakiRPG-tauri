@@ -2,7 +2,7 @@
 name = "speakirpg"
 version = "1.0.4"
 description = "Speaki RPG Desktop Client with Discord Rich Presence"
-authors = ["IffyChan <ifchan@yandex.ru>"]
+authors = ["IffyChan"]
 license = "GPL-3.0"
 repository = "https://github.com/IffyChan/SpeakiRPG-tauri"
 edition = "2021"

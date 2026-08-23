@@ -119,7 +119,7 @@ mod imp {
         }
 
         let primary = Regex::new(
-            r"([\w$]+)\.connect\(([\w$]+)\),sn\(\(\)=>\{an\(\)\.autoAttackEnabled\|\|",
+            r"([\w$]+)\.connect\(([\w$]+)\),[sc]n\(\(\)=>\{[an]n\(\)\.autoAttackEnabled\|\|",
         )
         .map_err(|e| e.to_string())?;
 
@@ -371,6 +371,14 @@ mod imp {
             assert!(is_game_document_url(
                 "https://speakirpg.overture.io.kr/?sr1_cb=1"
             ));
+        }
+
+        #[test]
+        fn patch_new_bundle_anchor() {
+            let src = "combatAssist;targetMonsterId;});k.connect(t)})()}});k.connect(g),cn(()=>{nn().autoAttackEnabled||k.stopAutoAttack()});";
+            let patched = super::patch_index_bundle(src).expect("patch new anchor");
+            assert!(patched.contains("window.gameState=k,k.connect(g)"));
+            assert!(!patched.contains("autoAttackEnabled||)"));
         }
 
         #[test]

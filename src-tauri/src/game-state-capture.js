@@ -84,7 +84,7 @@
     }
 
     const primaryRe =
-      /([\w$]+)\.connect\(([\w$]+)\),sn\(\(\)=>\{an\(\)\.autoAttackEnabled\|\|/;
+      /([\w$]+)\.connect\(([\w$]+)\),[sc]n\(\(\)=>\{[an]n\(\)\.autoAttackEnabled\|\|/;
     const primary = source.match(primaryRe);
     if (primary) {
       const recv = primary[1];
@@ -100,7 +100,7 @@
     }
 
     const legacyRe =
-      /(\}\);)([\w$]+)\.connect\(([\w$]+)\),(sn\(\(\)=>\{an\(\)\.autoAttackEnabled\|\|)/;
+      /(\}\);)([\w$]+)\.connect\(([\w$]+)\),([sc]n\(\(\)=>\{[an]n\(\)\.autoAttackEnabled\|\|)/;
     const legacy = source.match(legacyRe);
     if (legacy) {
       const recv = legacy[2];

@@ -199,6 +199,7 @@ fn set_settings(
 
     *state.write().unwrap() = settings.clone();
     persist_settings(&app, &settings);
+    push_settings_to_main_window(&app, &settings)?;
     app.emit("settings-changed", &settings)
         .map_err(|e| e.to_string())
 }
@@ -303,30 +304,88 @@ fn list_mods(app: AppHandle, state: tauri::State<RwLock<Settings>>) -> Result<Ve
     Ok(mods)
 }
 
-fn load_mod_scripts(app: &AppHandle, disabled_mods: &[String]) -> String {
+fn settings_bootstrap_script(settings: &Settings) -> String {
+    let json = serde_json::to_string(settings).unwrap_or_else(|_| "{}".into());
+    format!(
+        r#"(function(){{
+  var embedded = {json};
+  var live = embedded;
+  try {{
+    var raw = sessionStorage.getItem('__SPEAKI_SETTINGS__');
+    if (raw) live = Object.assign({{}}, embedded, JSON.parse(raw));
+  }} catch (e) {{}}
+  window.__SPEAKI_SETTINGS__ = live;
+  window.__SPEAKI_DISABLED_MODS = new Set(live.disabledMods || []);
+  window.__speakiIsModEnabled = function(fn) {{
+    return !(window.__SPEAKI_DISABLED_MODS && window.__SPEAKI_DISABLED_MODS.has(fn));
+  }};
+}})();"#,
+        json = json,
+    )
+}
+
+fn push_settings_to_main_window(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let json = serde_json::to_string(settings).map_err(|e| e.to_string())?;
+    let script = format!(
+        r#"(function() {{
+  var s = {json};
+  window.__SPEAKI_SETTINGS__ = s;
+  window.__SPEAKI_DISABLED_MODS = new Set(s.disabledMods || []);
+  try {{ sessionStorage.setItem('__SPEAKI_SETTINGS__', JSON.stringify(s)); }} catch (e) {{}}
+}})();"#,
+        json = json,
+    );
+    if let Some(window) = app.get_webview_window("main") {
+        window.eval(&script).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn wrap_mod_script(filename: &str, code: &str) -> String {
+    let filename_json = serde_json::to_string(filename).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#";(function(){{
+  if (!window.__speakiIsModEnabled || !window.__speakiIsModEnabled({filename})) return;
+  try {{
+{code}
+  }} catch (e) {{
+    console.error('[SpeakiRPG] mod failed:', {filename}, e);
+  }}
+}})();"#,
+        filename = filename_json,
+        code = code,
+    )
+}
+
+fn is_bundled_mod(filename: &str) -> bool {
+    BUNDLED_MODS.iter().any(|(name, _)| *name == filename)
+}
+
+// Shipped mods: compile-time include_str only (see BUNDLED_MODS). User mods: read from config dir at runtime.
+fn load_mod_scripts(app: &AppHandle) -> String {
     let mut scripts = String::new();
+
+    for (name, content) in BUNDLED_MODS {
+        scripts.push_str(&wrap_mod_script(name, content));
+    }
+
     let Some(mods_dir) = mods_dir(app) else {
         return scripts;
     };
     ensure_bundled_mods(&mods_dir);
 
-    let disabled: std::collections::HashSet<&str> =
-        disabled_mods.iter().map(String::as_str).collect();
-
     for path in list_mod_paths(&mods_dir) {
         let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if disabled.contains(filename) {
-            println!("skipped mod (disabled): {}", path.display());
+        if is_bundled_mod(filename) {
             continue;
         }
 
         match std::fs::read_to_string(&path) {
             Ok(code) => {
-                println!("loaded mod: {}", path.display());
-                scripts.push_str("\n;\n");
-                scripts.push_str(&code);
+                println!("loaded user mod: {}", path.display());
+                scripts.push_str(&wrap_mod_script(filename, &code));
             }
             Err(err) => eprintln!("failed to read mod {}: {err}", path.display()),
         }
@@ -640,10 +699,8 @@ fn main() {
                 session_start_ms: now_millis(),
             });
 
-            // WebviewWindowBuilder only: init order is settings snapshot, inject.js, mods
-            let settings_json = serde_json::to_string(&settings)
-                .unwrap_or_else(|_| "{}".into());
-            let mods = load_mod_scripts(&app_handle, &settings.disabled_mods);
+            // WebviewWindowBuilder only: init order is settings bootstrap, inject.js, mods
+            let mods = load_mod_scripts(&app_handle);
 
             let window = WebviewWindowBuilder::new(
                 app,
@@ -654,9 +711,7 @@ fn main() {
             .inner_size(1920.0, 1080.0)
             .center()
             // runs on every navigation; inject.js pushes to Rust (eval can't return DOM)
-            .initialization_script(format!(
-                "window.__SPEAKI_SETTINGS__ = {settings_json};"
-            ))
+            .initialization_script(settings_bootstrap_script(&settings))
             .initialization_script(include_str!("game-state-capture.js"))
             .initialization_script(include_str!("inject.js"))
             .initialization_script(mods)

@@ -10,6 +10,15 @@
     ...(window.__SPEAKI_SETTINGS__ || {}),
   };
 
+  function syncSettingsFromPayload(payload) {
+    settings = { ...settings, ...payload };
+    window.__SPEAKI_SETTINGS__ = { ...settings };
+    window.__SPEAKI_DISABLED_MODS = new Set(settings.disabledMods || []);
+    try {
+      sessionStorage.setItem('__SPEAKI_SETTINGS__', JSON.stringify(window.__SPEAKI_SETTINGS__));
+    } catch (_) {}
+  }
+
   // __TAURI__ may not exist yet when the init script first runs
   function onTauriReady(callback) {
     if (window.__TAURI__) callback();
@@ -561,7 +570,7 @@
     window.__TAURI__.event.listen('refresh-stats', () => pushStats(true));
 
     window.__TAURI__.event.listen('settings-changed', (event) => {
-      settings = { ...settings, ...event.payload };
+      syncSettingsFromPayload(event.payload);
       emitTo('settings', { ...settings });
       if (gameStateBridge) gameStateBridge.syncCaptureEnabled();
       const log = document.querySelector(CHAT_LOG_SELECTOR);

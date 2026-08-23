@@ -14,6 +14,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use tauri_plugin_opener::OpenerExt;
 
 mod translate;
+mod game_state_proxy;
 
 use translate::{TranslateConfig, Translator};
 
@@ -313,6 +314,7 @@ fn settings_bootstrap_script(settings: &Settings) -> String {
   try {{
     var raw = sessionStorage.getItem('__SPEAKI_SETTINGS__');
     if (raw) live = Object.assign({{}}, embedded, JSON.parse(raw));
+    sessionStorage.removeItem('__speaki_capture_reload');
   }} catch (e) {{}}
   window.__SPEAKI_SETTINGS__ = live;
   window.__SPEAKI_DISABLED_MODS = new Set(live.disabledMods || []);
@@ -361,14 +363,18 @@ fn is_bundled_mod(filename: &str) -> bool {
     BUNDLED_MODS.iter().any(|(name, _)| *name == filename)
 }
 
-// Shipped mods: compile-time include_str only (see BUNDLED_MODS). User mods: read from config dir at runtime.
-fn load_mod_scripts(app: &AppHandle) -> String {
+// Shipped mods: compile-time include_str only (see BUNDLED_MODS).
+fn load_bundled_mod_scripts() -> String {
     let mut scripts = String::new();
-
     for (name, content) in BUNDLED_MODS {
         scripts.push_str(&wrap_mod_script(name, content));
     }
+    scripts
+}
 
+// User mods from config dir; fetched fresh on each page load via get_user_mod_scripts.
+fn load_user_mod_scripts(app: &AppHandle) -> String {
+    let mut scripts = String::new();
     let Some(mods_dir) = mods_dir(app) else {
         return scripts;
     };
@@ -391,6 +397,11 @@ fn load_mod_scripts(app: &AppHandle) -> String {
         }
     }
     scripts
+}
+
+#[tauri::command]
+fn get_user_mod_scripts(app: AppHandle) -> String {
+    load_user_mod_scripts(&app)
 }
 
 fn open_settings_window(app: &AppHandle) -> Result<(), String> {
@@ -684,7 +695,8 @@ fn main() {
             set_settings,
             open_mods_folder,
             open_settings,
-            list_mods
+            list_mods,
+            get_user_mod_scripts
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
@@ -699,10 +711,10 @@ fn main() {
                 session_start_ms: now_millis(),
             });
 
-            // WebviewWindowBuilder only: init order is settings bootstrap, inject.js, mods
-            let mods = load_mod_scripts(&app_handle);
+            // init: settings bootstrap, capture, inject, bundled examples only; user mods via get_user_mod_scripts
+            let bundled_mods = load_bundled_mod_scripts();
 
-            let window = WebviewWindowBuilder::new(
+            let mut window_builder = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::App("index.html".into()),
@@ -711,11 +723,20 @@ fn main() {
             .inner_size(1920.0, 1080.0)
             .center()
             // runs on every navigation; inject.js pushes to Rust (eval can't return DOM)
-            .initialization_script(settings_bootstrap_script(&settings))
+            .initialization_script(settings_bootstrap_script(&settings));
+            #[cfg(windows)]
+            {
+                window_builder = window_builder.initialization_script(
+                    "window.__SPEAKI_NATIVE_GAMESTATE_PROXY = true;",
+                );
+            }
+            let window = window_builder
             .initialization_script(include_str!("game-state-capture.js"))
             .initialization_script(include_str!("inject.js"))
-            .initialization_script(mods)
+            .initialization_script(bundled_mods)
             .build()?;
+
+            game_state_proxy::install(&window, &app_handle);
 
             // register shortcuts only while focused so F5 isn't stolen from other apps
             let app_handle = app.handle().clone();

@@ -1,5 +1,11 @@
 (() => {
-  if (window.__SPEAKI_RPG_INJECTED__) return;
+  if (window.__SPEAKI_RPG_INJECTED__) {
+    if (window.__SPEAKI_SETTINGS__) {
+      window.__SPEAKI_CORE__?.syncSettings?.(window.__SPEAKI_SETTINGS__);
+    }
+    window.__SPEAKI_CORE__?.onPageLoad?.();
+    return;
+  }
   window.__SPEAKI_RPG_INJECTED__ = true;
 
   let settings = {
@@ -566,8 +572,120 @@
     setTimeout(ensureUi, 2000);
   }
 
+  const GAME_URL = 'https://speakirpg.overture.io.kr/';
+
+  function isGamePage() {
+    return window.location.hostname === 'speakirpg.overture.io.kr';
+  }
+
+  function setBootStatus(text) {
+    const el = document.getElementById('boot-status');
+    if (el) el.textContent = text;
+  }
+
+  function waitGameStateProxyReady() {
+    if (!window.__SPEAKI_NATIVE_GAMESTATE_PROXY) return Promise.resolve();
+    if (window.__SPEAKI_GAMESTATE_PROXY_READY) return Promise.resolve();
+    return new Promise((resolve) => {
+      const deadline = Date.now() + 8000;
+      (function tick() {
+        if (window.__SPEAKI_GAMESTATE_PROXY_READY || Date.now() > deadline) {
+          if (!window.__SPEAKI_GAMESTATE_PROXY_READY) {
+            console.warn('[SpeakiRPG] gameState proxy hook not ready before game open');
+          }
+          resolve();
+          return;
+        }
+        setTimeout(tick, 25);
+      })();
+    });
+  }
+
+  function loadUserMods() {
+    if (!window.__TAURI__) return Promise.resolve();
+    return window.__TAURI__.core
+      .invoke('get_user_mod_scripts')
+      .then((code) => {
+        const src = String(code || '').trim();
+        if (!src) {
+          console.log('[SpeakiRPG] no user mods in config dir');
+          return;
+        }
+        console.log('[SpeakiRPG] running user mods from config dir');
+        // eslint-disable-next-line no-new-func
+        new Function(src)();
+      })
+      .catch((err) => {
+        console.error('[SpeakiRPG] user mods failed:', err);
+      });
+  }
+
+  function maybeReloadForMissedPatch() {
+    if (!isGamePage() || !settings.captureGameState) return;
+    setTimeout(() => {
+      const status = SpeakiRPG?.gameStateStatus;
+      const st = window.__speakiGsCaptureState;
+      if (status !== 'pending' || st?.scriptHookPatchSeen || st?.nativePatchSeen) return;
+      try {
+        if (sessionStorage.getItem('__speaki_gs_reload')) return;
+        sessionStorage.setItem('__speaki_gs_reload', '1');
+      } catch {
+        return;
+      }
+      console.warn('[SpeakiRPG] gameState patch missed, reloading once');
+      window.location.reload();
+    }, 5000);
+  }
+
+  function openGamePage() {
+    if (isGamePage()) return;
+    console.log('[SpeakiRPG] opening game');
+    window.location.replace(GAME_URL);
+  }
+
+  function onPageLoad() {
+    if (gameStateBridge) gameStateBridge.syncCaptureEnabled();
+
+    onTauriReady(() => {
+      if (!isGamePage()) setBootStatus('Loading mods…');
+
+      loadUserMods()
+        .then(() => waitGameStateProxyReady())
+        .then(() => {
+          if (!isGamePage()) {
+            setBootStatus('Opening game…');
+            openGamePage();
+          }
+        });
+    });
+
+    if (!isGamePage()) {
+      setTimeout(() => {
+        if (!isGamePage()) {
+          console.warn('[SpeakiRPG] boot timeout, opening game anyway');
+          waitGameStateProxyReady().then(openGamePage);
+        }
+      }, 15000);
+    } else {
+      maybeReloadForMissedPatch();
+    }
+  }
+
+  window.__SPEAKI_CORE__ = {
+    syncSettings(payload) {
+      syncSettingsFromPayload(payload);
+    },
+    onPageLoad,
+  };
+
+  onPageLoad();
+
   onTauriReady(() => {
     window.__TAURI__.event.listen('refresh-stats', () => pushStats(true));
+
+    window.__TAURI__.event.listen('gamestate-index-patched', () => {
+      window.__speakiGsOnNativePatch?.();
+    });
 
     window.__TAURI__.event.listen('settings-changed', (event) => {
       syncSettingsFromPayload(event.payload);

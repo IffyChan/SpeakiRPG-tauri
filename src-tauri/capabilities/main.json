@@ -10,6 +10,7 @@
     "core:default",
     "allow-update-stats",
     "allow-translate-text",
-    "allow-open-settings"
+    "allow-open-settings",
+    "allow-get-user-mod-scripts"
   ]
 }

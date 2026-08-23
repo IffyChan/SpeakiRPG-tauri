@@ -18,40 +18,15 @@
             background-repeat: no-repeat;
             background-position: center;
             overflow: hidden;
-        }
-
-        form {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        label {
-            margin: 10px 0;
-        }
-
-        button {
-            margin-top: 20px;
-            padding: 10px 20px;
+            color: #fff;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
         }
     </style>
 </head>
 
 <body>
     <h1>Loading</h1>
-
-    <script>
-        let load = () => {
-            load = () => {}; // onload and DOMContentLoaded both call load()
-            const defaultSite = "https://speakirpg.overture.io.kr/";
-            window.location.replace(defaultSite);
-        };
-        // cap wait so a slow splash background doesn't delay redirect to the game
-        document.addEventListener("DOMContentLoaded", () => setTimeout(() => load(), 200));
-        window.onload = () => load();
-    </script>
-
-
+    <p id="boot-status" style="margin-top: 0.5rem; font-size: 0.95rem; opacity: 0.9">Preparing client…</p>
 </body>
 
 </html>

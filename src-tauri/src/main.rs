@@ -225,7 +225,7 @@ fn mods_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 const BUNDLED_MODS: &[(&str, &str)] = &[
     ("example-highlight.js", include_str!("../mods/example-highlight.js")),
-    ("example-boss-target.js", include_str!("../mods/example-boss-target.js")),
+    ("example-emotes.js", include_str!("../mods/example-emotes.js")),
 ];
 
 fn ensure_bundled_mods(mods_dir: &std::path::Path) {
@@ -646,7 +646,7 @@ fn main() {
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .title("SpeakiRPG")
+            .title("SpeakiRPG | Client by ifchan")
             .inner_size(1920.0, 1080.0)
             .center()
             // runs on every navigation; inject.js pushes to Rust (eval can't return DOM)

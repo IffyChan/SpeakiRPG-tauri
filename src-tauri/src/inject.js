@@ -15,7 +15,15 @@
     else setTimeout(() => onTauriReady(callback), 50);
   }
 
-  const listeners = { chat: [], stats: [], settings: [], player: [], target: [], dialog: [] };
+  const listeners = {
+    chat: [],
+    stats: [],
+    settings: [],
+    player: [],
+    target: [],
+    dialog: [],
+    emote: [],
+  };
 
   const SELECTORS = Object.freeze({
     chatLog: '.sr-chatbox__log',
@@ -29,6 +37,7 @@
     playerLevel: '.sr-player-card__portrait-wrap .sr-player-card__lv-badge',
     playerExp: '.sr-player-card__exp-track',
     playerRevive: '.sr-player-card__revive-pill',
+    playerHp: '.sr-hp-gauge__value',
     minimapCaption: '.sr-minimap-frame__caption',
     targetFrame: '.sr-target-frame',
     targetName: '.sr-target-frame__name',
@@ -41,6 +50,8 @@
     npcText: '.sr-npc-dialog__text',
     skillBar: '.sr-skill-hotbar',
     skillSlot: '.sr-skill-slot',
+    emoteSlot: '.sr-emote-slot',
+    potionPopover: '.sr-potion-popover',
     castBar: '.sr-cast-bar',
     gameCanvas: '.sr-game-canvas',
   });
@@ -73,7 +84,7 @@
   }
 
   window.SpeakiRPG = {
-    version: '1.0.4',
+    version: '1.0.5',
     selectors: SELECTORS,
     get settings() {
       return { ...settings };
@@ -91,6 +102,12 @@
     },
     getDialog() {
       return { ...readDialog() };
+    },
+    clickEmoteSlot() {
+      const slot = document.querySelector(SELECTORS.emoteSlot);
+      if (!slot) return false;
+      slot.click();
+      return true;
     },
     query(selector) {
       return document.querySelector(selector);
@@ -128,14 +145,37 @@
     };
   }
 
+  function readHpGauge() {
+    const text = readText(document.querySelector(SELECTORS.playerHp));
+    const match = text.match(/^(\d+)\s*\/\s*(\d+)/);
+    if (!match) {
+      return { hpText: text || null, hpCurrent: null, hpMax: null };
+    }
+    return {
+      hpText: text,
+      hpCurrent: Number.parseInt(match[1], 10),
+      hpMax: Number.parseInt(match[2], 10),
+    };
+  }
+
+  function badgeActive(frame, selector) {
+    const badge = frame.querySelector(selector);
+    return isVisible(badge);
+  }
+
   function readPlayer() {
     const stats = readStats();
     if (!document.querySelector(SELECTORS.playerCard)) return null;
     const expTrack = document.querySelector(SELECTORS.playerExp);
+    const hp = readHpGauge();
+    const reviveEl = document.querySelector(SELECTORS.playerRevive);
+    const needsRevive =
+      hp.hpCurrent === 0 || (hp.hpCurrent === null && isVisible(reviveEl));
     return {
       ...stats,
+      ...hp,
       expPercent: readPercentFromWidth(expTrack?.querySelector('.sr-player-card__exp-fill')),
-      needsRevive: isVisible(document.querySelector(SELECTORS.playerRevive)),
+      needsRevive,
     };
   }
 
@@ -146,8 +186,8 @@
     return {
       name: name || null,
       hasTarget: !!name,
-      isBoss: !!frame.querySelector(SELECTORS.targetBossBadge),
-      isBurning: !!frame.querySelector(SELECTORS.targetBurnBadge),
+      isBoss: badgeActive(frame, SELECTORS.targetBossBadge),
+      isBurning: badgeActive(frame, SELECTORS.targetBurnBadge),
       hpText: readText(frame.querySelector(SELECTORS.targetHpValue)) || null,
       hpPercent: readPercentFromWidth(frame.querySelector(SELECTORS.targetHpFill)),
     };
@@ -163,6 +203,18 @@
       npcName: readText(dialog.querySelector(SELECTORS.npcName)) || null,
       text: readText(dialog.querySelector(SELECTORS.npcText)) || null,
     };
+  }
+
+  const EMOJI_ONLY = /^[\p{Extended_Pictographic}\s]+$/u;
+  const EMOTE_HINT =
+    /\b(emote|emotes|wave|waves|dance|dances|bow|bows|cheer|cheers)\b/i;
+
+  function isEmoteChat(text, isSystem) {
+    if (!text) return false;
+    const stripped = text.replace(/\[[^\]]+\]/g, '').trim();
+    if (stripped && EMOJI_ONLY.test(stripped)) return true;
+    if (isSystem && EMOTE_HINT.test(text)) return true;
+    return false;
   }
 
   function observeDom(rootSelector, eventName, readFn) {
@@ -232,6 +284,9 @@
 
     // occasional English from others when target is Cyrillic
     if (!isMine && hasLatin && !hasCyrillic && target === 'ru') return true;
+
+    // Cyrillic from others when target is not Russian/Ukrainian
+    if (!isMine && hasCyrillic && target !== 'ru' && target !== 'uk') return true;
 
     return false;
   }
@@ -342,18 +397,17 @@
     if (!row.dataset.srSeen) {
       row.dataset.srSeen = '1';
       const senderEl = row.querySelector(SELECTORS.chatSender);
-      emitTo(
-        'chat',
-        {
-          text,
-          sender: row.dataset.playerName ?? null,
-          playerId: row.dataset.playerId ?? null,
-          senderLabel: senderEl ? readText(senderEl) || null : null,
-          isMine,
-          isSystem,
-        },
-        row
-      );
+      const message = {
+        text,
+        sender: row.dataset.playerName ?? null,
+        playerId: row.dataset.playerId ?? null,
+        senderLabel: senderEl ? readText(senderEl) || null : null,
+        isMine,
+        isSystem,
+        isEmote: isEmoteChat(text, isSystem),
+      };
+      emitTo('chat', message, row);
+      if (message.isEmote) emitTo('emote', message, row);
     }
 
     if (!settings.translateEnabled) return;
@@ -371,12 +425,13 @@
 
     row.dataset.srTranslatePending = '1';
     translateText(text).then((translated) => {
-      if (!translated || translated === text) {
+      try {
+        if (!translated || translated === text) return;
+        if (row.querySelector('.sr-translate-original')) return;
+        applyTranslation(row, isSystem ? row : body, text, translated);
+      } finally {
         delete row.dataset.srTranslatePending;
-        return;
       }
-      if (row.querySelector('.sr-translate-original')) return;
-      applyTranslation(row, isSystem ? row : body, text, translated);
     });
   }
 

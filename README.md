@@ -73,7 +73,7 @@ Settings window or `settings.json` in the app config dir:
 
 ### Mods
 
-Put `.js` files in `<config dir>/mods/`. Loaded after the built-in script, sorted by filename. Open the folder from Settings.
+Put `.js` files in `<config dir>/mods/`. Loaded after the built-in script, sorted by filename. Enable or disable each mod in Settings (reload the game page with F5 to apply). On first run the client copies `example-highlight.js` into that folder.
 
 `window.SpeakiRPG` API:
 
@@ -86,7 +86,7 @@ Put `.js` files in `<config dir>/mods/`. Loaded after the built-in script, sorte
 | `on('settings', cb)` | `cb(settings)` on change |
 | `translate(text)` | Returns a Promise with translated text |
 
-`on()` returns unsubscribe. Example (`mods/highlight.js`):
+`on()` returns unsubscribe. Bundled example (`example-highlight.js`):
 
 ```js
 let myName = null;

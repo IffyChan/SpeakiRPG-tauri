@@ -1,56 +1,50 @@
 # SpeakiRPG Desktop Client
 
-Desktop wrapper for [Speaki RPG](https://speakirpg.overture.io.kr/) with Discord Rich Presence, in-game chat translation, and optional user scripts.
+Tauri desktop client for [Speaki RPG](https://speakirpg.overture.io.kr/): Discord Rich Presence, chat translation, user scripts.
 
-Based on the original [SpeakiRPG Electron client](https://github.com/DJTOMATO/SpeakiRPG) by [DJTOMATO](https://github.com/DJTOMATO). This repo is a Tauri port of that idea and feature set.
-
-Fan-made client. Not affiliated with the game developers. No game assets are bundled.
+Tauri port of the [original Electron client](https://github.com/DJTOMATO/SpeakiRPG) by [DJTOMATO](https://github.com/DJTOMATO). Fan-made, not affiliated with the game. No game assets included.
 
 ## Screenshots
-
-<!-- Drop PNGs into docs/screenshots/ with these filenames -->
 
 ![Game in the desktop client](docs/screenshots/game-window.png)
 ![Discord Rich Presence](docs/screenshots/discord-presence.png)
 ![Chat translation](docs/screenshots/chat-translation.png)
+![Settings window](docs/screenshots/settings-window.png)
 
-## Download
+## Install
 
-Pre-built installers: [GitHub Releases](https://github.com/IffyChan/SpeakiRPG-tauri/releases)
+**Releases:** [github.com/IffyChan/SpeakiRPG-tauri/releases](https://github.com/IffyChan/SpeakiRPG-tauri/releases)
 
-## Build from source
-
-**Requirements:** [Node.js](https://nodejs.org/), [Rust](https://rustup.rs/), and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
+**From source** ([Node.js](https://nodejs.org/), [Rust](https://rustup.rs/), [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)):
 
 ```bash
 git clone https://github.com/IffyChan/SpeakiRPG-tauri.git
 cd SpeakiRPG-tauri
 npm install
-npm run dev      # run in development
-npm run build    # release installer in src-tauri/target/release/bundle/
+npm run dev
+npm run build    # installer -> src-tauri/target/release/bundle/
 ```
 
 ## Usage
 
-1. Launch the app. It opens a splash screen, then loads the game site.
-2. Log in. Discord status updates from your character card (name, level, XP, location) after a short delay, then every 5 minutes.
-3. Korean chat lines get a translation under the message when translation is enabled (default on).
-
-Discord must be running for Rich Presence to show.
+1. Run the app, log in on the game site (splash redirects automatically).
+2. Discord shows name, level, XP, and location from your character card (~30s after load, then every 5 min). Discord must be running.
+3. Chat lines with Korean text get translated in place; original text stays in muted brackets. Toggle with `Ctrl+Shift+T` or Settings (`Ctrl+Shift+S` / gear button bottom-right).
 
 ## Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `F5` / `Ctrl+R` (`Cmd+R` on macOS) | Reload page |
-| `Ctrl+Shift+D` | Force Discord status refresh |
+| `F5`, `Ctrl+R` (`Cmd+R` on macOS) | Reload page |
+| `Ctrl+Shift+D` | Refresh Discord status |
 | `Ctrl+Shift+T` | Toggle chat translation |
+| `Ctrl+Shift+S` | Open settings |
 
-Shortcuts work while the game window is focused.
+Active while the game window is focused.
 
 ## Configuration
 
-On first run the app creates `settings.json` in the config directory:
+Settings window or `settings.json` in the app config dir:
 
 | OS | Path |
 |----|------|
@@ -58,25 +52,43 @@ On first run the app creates `settings.json` in the config directory:
 | Linux | `~/.config/com.ifchan.speakirpg/settings.json` |
 | macOS | `~/Library/Application Support/com.ifchan.speakirpg/settings.json` |
 
-```json
-{
-  "translateTarget": "ru",
-  "translateEnabled": true
-}
-```
-
 | Field | Default | Description |
 |-------|---------|-------------|
-| `translateTarget` | `"ru"` | ISO language code for chat translation |
-| `translateEnabled` | `true` | Start with translation on (`Ctrl+Shift+T` toggles at runtime) |
+| `translateTarget` | `"ru"` | Target language (ISO code) |
+| `translateEnabled` | `true` | Chat translation on/off |
+| `translateOwn` | `false` | Translate your own messages |
 
-### User mods
+### Mods
 
-Drop `.js` files into `<config dir>/mods/`. They run on every page load after the built-in inject script, in filename order.
+Put `.js` files in `<config dir>/mods/`. Loaded after the built-in script, sorted by filename. Open the folder from Settings.
+
+`window.SpeakiRPG` API:
+
+| Member | Description |
+|--------|-------------|
+| `version` | Client version |
+| `settings` | `{ translateTarget, translateEnabled, translateOwn }` |
+| `on('chat', cb)` | `cb({ sender, text, isMine, isSystem }, row)` |
+| `on('stats', cb)` | `cb({ playerName, level, exp, location })` |
+| `on('settings', cb)` | `cb(settings)` on change |
+| `translate(text)` | Returns a Promise with translated text |
+
+`on()` returns unsubscribe. Example (`mods/highlight.js`):
+
+```js
+let myName = null;
+SpeakiRPG.on('stats', (s) => { myName = s.playerName; });
+SpeakiRPG.on('chat', (m, row) => {
+  if (m.isMine || !myName || !m.text) return;
+  if (m.text.toLowerCase().includes(myName.toLowerCase())) {
+    row.style.background = 'rgba(255, 200, 0, 0.12)';
+  }
+});
+```
 
 ### Discord app ID
 
-The bundled build uses a shared Discord application ID. To ship your own build, change `CLIENT_ID` in `src-tauri/src/main.rs` and set up a Discord application in the [Developer Portal](https://discord.com/developers/applications).
+Default build uses a shared `CLIENT_ID` in `src-tauri/src/main.rs`. For your own release, create an app in the [Discord Developer Portal](https://discord.com/developers/applications) and replace it.
 
 ## License
 

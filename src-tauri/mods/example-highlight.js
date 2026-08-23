@@ -1,10 +1,10 @@
 // SpeakiRPG mod: mention highlight
 // Soft yellow background on chat lines that mention your character name.
 
-let myName = null;
+let myName = SpeakiRPG.getPlayer()?.playerName ?? null;
 
-SpeakiRPG.on('stats', (stats) => {
-  if (stats.playerName) myName = stats.playerName;
+SpeakiRPG.on('player', (player) => {
+  if (player.playerName) myName = player.playerName;
 });
 
 SpeakiRPG.on('chat', (message, row) => {

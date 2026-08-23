@@ -140,7 +140,7 @@ Path: [README → Configuration](../README.md#configuration).
 
 ```json
 {
-  "translateEnabled": true,
+  "translateEnabled": false,
   "translateTarget": "en",
   "translateProvider": "custom",
   "translateEndpoint": "http://127.0.0.1:11434/api/chat",
@@ -149,6 +149,8 @@ Path: [README → Configuration](../README.md#configuration).
   "translateApiKey": ""
 }
 ```
+
+Turn on **Translate chat messages** in Settings (or set `"translateEnabled": true`) after editing.
 
 Escape inner quotes as `\"`, newlines as `\\n`.
 

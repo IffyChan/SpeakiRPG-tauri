@@ -29,7 +29,7 @@ npm run build    # installer -> src-tauri/target/release/bundle/
 
 1. Run the app, log in on the game site (splash redirects automatically).
 2. Discord shows name, level, XP, and location from your character card (~30s after load, then every 5 min). Discord must be running.
-3. Chat lines in Korean or Japanese get translated in place; original text stays in muted brackets. Toggle with `Ctrl+Shift+T` or Settings (`Ctrl+Shift+S` / gear button bottom-right).
+3. Chat lines in Korean or Japanese can be translated in place when enabled in Settings; original text stays in muted brackets. Toggle with `Ctrl+Shift+T` or Settings (`Ctrl+Shift+S` / gear button bottom-right).
 
 ## Shortcuts
 
@@ -54,8 +54,8 @@ Settings window or `settings.json` in the app config dir:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `translateTarget` | `"ru"` | Target language (ISO code) |
-| `translateEnabled` | `true` | Chat translation on/off |
+| `translateTarget` | `"en"` | Target language (ISO code) |
+| `translateEnabled` | `false` | Chat translation on/off |
 | `translateOwn` | `false` | Translate your own messages |
 | `translateProvider` | `"mymemory"` | `mymemory`, `gtx`, or `custom` |
 | `translateEndpoint` | `""` | Custom GET/POST URL (`{text}`, `{target}`, `{api_key}`) |
@@ -75,29 +75,26 @@ Settings window or `settings.json` in the app config dir:
 
 Put `.js` files in `<config dir>/mods/`. Loaded after the built-in script, sorted by filename. Enable or disable each mod in Settings (reload the game page with F5 to apply). On first run the client copies `example-highlight.js` into that folder.
 
-`window.SpeakiRPG` API:
+**Full guide:** [docs/mods.md](docs/mods.md) — API reference, confirmed selectors, examples.
+
+`window.SpeakiRPG` API (summary):
 
 | Member | Description |
 |--------|-------------|
 | `version` | Client version |
-| `settings` | `{ translateTarget, translateEnabled, translateOwn, translateProvider, ... }` |
-| `on('chat', cb)` | `cb({ sender, text, isMine, isSystem }, row)` |
-| `on('stats', cb)` | `cb({ playerName, level, exp, location })` |
+| `selectors` | Confirmed `sr-*` CSS selectors |
+| `settings` | Client settings snapshot |
+| `getStats()` / `getPlayer()` / `getTarget()` / `getDialog()` | HUD snapshots |
+| `query` / `queryAll` | DOM helpers |
+| `on('chat', cb)` | `cb({ text, sender, playerId, senderLabel, isMine, isSystem }, row)` |
+| `on('player', cb)` | `cb({ playerName, level, exp, location, expPercent, needsRevive }, card)` |
+| `on('target', cb)` | `cb({ name, hasTarget, isBoss, isBurning, hpText, hpPercent }, frame)` |
+| `on('dialog', cb)` | `cb({ open, npcName, text }, dialog)` |
+| `on('stats', cb)` | `cb({ playerName, level, exp, location })` (Discord schedule) |
 | `on('settings', cb)` | `cb(settings)` on change |
 | `translate(text)` | Returns a Promise with translated text |
 
-`on()` returns unsubscribe. Bundled example (`example-highlight.js`):
-
-```js
-let myName = null;
-SpeakiRPG.on('stats', (s) => { myName = s.playerName; });
-SpeakiRPG.on('chat', (m, row) => {
-  if (m.isMine || !myName || !m.text) return;
-  if (m.text.toLowerCase().includes(myName.toLowerCase())) {
-    row.style.background = 'rgba(255, 200, 0, 0.12)';
-  }
-});
-```
+`on()` returns unsubscribe. Bundled examples: `example-highlight.js`, `example-boss-target.js`.
 
 ### Discord app ID
 

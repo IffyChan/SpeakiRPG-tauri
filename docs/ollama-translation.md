@@ -116,7 +116,7 @@ curl http://127.0.0.1:11434/api/chat -d "{\"model\":\"qwen3.5:4b\",\"think\":fal
 
 ```json
 {
-  "translateEnabled": true,
+  "translateEnabled": false,
   "translateTarget": "ru",
   "translateProvider": "custom",
   "translateEndpoint": "http://127.0.0.1:11434/api/chat",
@@ -125,6 +125,8 @@ curl http://127.0.0.1:11434/api/chat -d "{\"model\":\"qwen3.5:4b\",\"think\":fal
   "translateApiKey": ""
 }
 ```
+
+Включи перевод: галочка **Translate chat messages** в Settings или `"translateEnabled": true`.
 
 Важно: в JSON файле кавычки внутри `translatePostBody` экранируются как `\"`, перенос строки — как `\\n`.
 

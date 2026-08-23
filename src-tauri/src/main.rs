@@ -223,15 +223,22 @@ fn mods_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| dir.join("mods"))
 }
 
+const BUNDLED_MODS: &[(&str, &str)] = &[
+    ("example-highlight.js", include_str!("../mods/example-highlight.js")),
+    ("example-boss-target.js", include_str!("../mods/example-boss-target.js")),
+];
+
 fn ensure_bundled_mods(mods_dir: &std::path::Path) {
     if std::fs::create_dir_all(mods_dir).is_err() {
         return;
     }
-    let example = mods_dir.join("example-highlight.js");
-    if example.exists() {
-        return;
+    for (name, content) in BUNDLED_MODS {
+        let path = mods_dir.join(name);
+        if path.exists() {
+            continue;
+        }
+        let _ = std::fs::write(path, content);
     }
-    let _ = std::fs::write(example, include_str!("../mods/example-highlight.js"));
 }
 
 fn mod_display_name(filename: &str, source: &str) -> String {

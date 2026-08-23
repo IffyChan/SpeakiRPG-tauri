@@ -15,7 +15,51 @@
     else setTimeout(() => onTauriReady(callback), 50);
   }
 
-  const listeners = { chat: [], stats: [], settings: [] };
+  const listeners = { chat: [], stats: [], settings: [], player: [], target: [], dialog: [] };
+
+  const SELECTORS = Object.freeze({
+    chatLog: '.sr-chatbox__log',
+    chatRow: '.sr-chatbox__row',
+    chatBody: '.sr-chatbox__body-text',
+    chatSender: '.sr-chatbox__sender',
+    chatSenderMine: '.sr-chatbox__sender--mine',
+    chatSystemRow: '.sr-chatbox__system-text',
+    playerCard: '.sr-player-card',
+    playerName: '.sr-player-card__name',
+    playerLevel: '.sr-player-card__portrait-wrap .sr-player-card__lv-badge',
+    playerExp: '.sr-player-card__exp-track',
+    playerRevive: '.sr-player-card__revive-pill',
+    minimapCaption: '.sr-minimap-frame__caption',
+    targetFrame: '.sr-target-frame',
+    targetName: '.sr-target-frame__name',
+    targetBossBadge: '.sr-target-frame__boss-badge',
+    targetBurnBadge: '.sr-target-frame__burn-badge',
+    targetHpValue: '.sr-target-frame__hp-value',
+    targetHpFill: '.sr-target-frame__hp-fill',
+    npcDialog: '.sr-npc-dialog',
+    npcName: '.sr-npc-dialog__name-tag',
+    npcText: '.sr-npc-dialog__text',
+    skillBar: '.sr-skill-hotbar',
+    skillSlot: '.sr-skill-slot',
+    castBar: '.sr-cast-bar',
+    gameCanvas: '.sr-game-canvas',
+  });
+
+  function isVisible(el) {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  function readText(el) {
+    return el ? el.innerText.trim() : '';
+  }
+
+  function readPercentFromWidth(el) {
+    if (!el?.style?.width) return null;
+    const value = parseFloat(el.style.width);
+    return Number.isFinite(value) ? value : null;
+  }
 
   function emitTo(event, payload, ...extra) {
     for (const cb of listeners[event].slice()) {
@@ -30,8 +74,29 @@
 
   window.SpeakiRPG = {
     version: '1.0.4',
+    selectors: SELECTORS,
     get settings() {
       return { ...settings };
+    },
+    getStats() {
+      return { ...readStats() };
+    },
+    getPlayer() {
+      const player = readPlayer();
+      return player ? { ...player } : null;
+    },
+    getTarget() {
+      const target = readTarget();
+      return target ? { ...target } : null;
+    },
+    getDialog() {
+      return { ...readDialog() };
+    },
+    query(selector) {
+      return document.querySelector(selector);
+    },
+    queryAll(selector) {
+      return [...document.querySelectorAll(selector)];
     },
     on(event, cb) {
       if (!listeners[event]) return () => {};
@@ -51,18 +116,83 @@
 
   // selectors from Electron capturePageStats()
   function readStats() {
-    const nameEl = document.querySelector('.sr-player-card__name');
-    const levelEl = document.querySelector(
-      '.sr-player-card__portrait-wrap .sr-player-card__lv-badge'
-    );
-    const expEl = document.querySelector('.sr-player-card__exp-track');
-    const locationEl = document.querySelector('.sr-minimap-frame__caption');
+    const nameEl = document.querySelector(SELECTORS.playerName);
+    const levelEl = document.querySelector(SELECTORS.playerLevel);
+    const expEl = document.querySelector(SELECTORS.playerExp);
+    const locationEl = document.querySelector(SELECTORS.minimapCaption);
     return {
-      playerName: nameEl ? nameEl.innerText.trim() : null,
-      level: levelEl ? levelEl.innerText.trim() : null,
-      exp: expEl ? (expEl.getAttribute('title') || expEl.innerText.trim()) : null,
-      location: locationEl ? locationEl.innerText.trim() : null,
+      playerName: nameEl ? readText(nameEl) || null : null,
+      level: levelEl ? readText(levelEl) || null : null,
+      exp: expEl ? (expEl.getAttribute('title') || readText(expEl) || null) : null,
+      location: locationEl ? readText(locationEl) || null : null,
     };
+  }
+
+  function readPlayer() {
+    const stats = readStats();
+    if (!document.querySelector(SELECTORS.playerCard)) return null;
+    const expTrack = document.querySelector(SELECTORS.playerExp);
+    return {
+      ...stats,
+      expPercent: readPercentFromWidth(expTrack?.querySelector('.sr-player-card__exp-fill')),
+      needsRevive: isVisible(document.querySelector(SELECTORS.playerRevive)),
+    };
+  }
+
+  function readTarget() {
+    const frame = document.querySelector(SELECTORS.targetFrame);
+    if (!frame) return null;
+    const name = readText(frame.querySelector(SELECTORS.targetName));
+    return {
+      name: name || null,
+      hasTarget: !!name,
+      isBoss: !!frame.querySelector(SELECTORS.targetBossBadge),
+      isBurning: !!frame.querySelector(SELECTORS.targetBurnBadge),
+      hpText: readText(frame.querySelector(SELECTORS.targetHpValue)) || null,
+      hpPercent: readPercentFromWidth(frame.querySelector(SELECTORS.targetHpFill)),
+    };
+  }
+
+  function readDialog() {
+    const dialog = document.querySelector(SELECTORS.npcDialog);
+    if (!dialog || !isVisible(dialog)) {
+      return { open: false, npcName: null, text: null };
+    }
+    return {
+      open: true,
+      npcName: readText(dialog.querySelector(SELECTORS.npcName)) || null,
+      text: readText(dialog.querySelector(SELECTORS.npcText)) || null,
+    };
+  }
+
+  function observeDom(rootSelector, eventName, readFn) {
+    const attach = (root) => {
+      if (root.__srObserved === eventName) return;
+      root.__srObserved = eventName;
+      let last = '';
+      const push = () => {
+        const data = readFn(root);
+        const key = JSON.stringify(data);
+        if (key === last) return;
+        last = key;
+        emitTo(eventName, data, root);
+      };
+      push();
+      new MutationObserver(push).observe(root, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['title', 'style', 'class'],
+      });
+    };
+
+    const poll = () => {
+      const root = document.querySelector(rootSelector);
+      if (root) attach(root);
+      setTimeout(poll, 2000);
+    };
+    poll();
   }
 
   function hasStats(stats) {
@@ -83,7 +213,7 @@
   const CJK = /[\u4E00-\u9FFF\u3400-\u4DBF]/;
   const CYRILLIC = /[\u0400-\u04FF]/;
   const LATIN = /[A-Za-z\u00C0-\u024F]/;
-  const CHAT_LOG_SELECTOR = '.sr-chatbox__log';
+  const CHAT_LOG_SELECTOR = SELECTORS.chatLog;
   const MAX_TEXT_LENGTH = 500; // MyMemory free tier per request
 
   function shouldTranslate(text, isMine) {
@@ -208,10 +338,22 @@
     const text = (isSystem ? row.textContent : body ? body.textContent : '').trim();
     if (!text) return;
 
-    const isMine = !isSystem && !!row.querySelector('.sr-chatbox__sender--mine');
+    const isMine = !isSystem && !!row.querySelector(SELECTORS.chatSenderMine);
     if (!row.dataset.srSeen) {
       row.dataset.srSeen = '1';
-      emitTo('chat', { sender: row.dataset.playerName ?? null, text, isMine, isSystem }, row);
+      const senderEl = row.querySelector(SELECTORS.chatSender);
+      emitTo(
+        'chat',
+        {
+          text,
+          sender: row.dataset.playerName ?? null,
+          playerId: row.dataset.playerId ?? null,
+          senderLabel: senderEl ? readText(senderEl) || null : null,
+          isMine,
+          isSystem,
+        },
+        row
+      );
     }
 
     if (!settings.translateEnabled) return;
@@ -321,6 +463,9 @@
     }, 30 * 1000);
 
     observeChat();
+    observeDom(SELECTORS.playerCard, 'player', () => readPlayer());
+    observeDom(SELECTORS.targetFrame, 'target', () => readTarget());
+    observeDom(SELECTORS.npcDialog, 'dialog', () => readDialog());
   });
 
   // gear/styles don't need __TAURI__; IPC listeners wait for it in onTauriReady

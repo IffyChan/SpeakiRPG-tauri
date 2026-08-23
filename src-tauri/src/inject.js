@@ -82,8 +82,26 @@
   const CHAT_LOG_SELECTOR = '.sr-chatbox__log';
   const MAX_TEXT_LENGTH = 450; // gtx GET; long strings won't fit the URL
 
+  // init script runs before <html>; head and documentElement can both be null
+  function onDomReady(callback) {
+    const run = () => {
+      if (!document.documentElement) return false;
+      callback();
+      return true;
+    };
+    if (run()) return;
+    document.addEventListener('DOMContentLoaded', () => run(), { once: true });
+    window.addEventListener('load', () => run(), { once: true });
+    const poll = () => {
+      if (!run()) requestAnimationFrame(poll);
+    };
+    poll();
+  }
+
   function injectStyles() {
     if (document.getElementById('sr-style')) return;
+    const mount = document.head || document.documentElement;
+    if (!mount) return;
     const style = document.createElement('style');
     style.id = 'sr-style';
     // 2147483647: game overlays sat above z-index 9999
@@ -99,7 +117,7 @@
       }
       #sr-settings-btn:hover { opacity: 1; }
     `;
-    (document.head || document.documentElement).appendChild(style);
+    mount.appendChild(style);
   }
 
   // one in flight, 150ms gap so a busy chat doesn't hammer gtx
@@ -193,15 +211,11 @@
     root.appendChild(btn);
   }
 
-  // init script can run before body exists; SPA re-renders can drop the button
+  // body preferred for fixed UI; SPA re-renders can drop the button
   function ensureSettingsButton() {
     if (document.getElementById('sr-settings-btn')) return;
-    const root = document.body || document.documentElement;
-    if (!root) {
-      document.addEventListener('DOMContentLoaded', ensureSettingsButton, { once: true });
-      window.addEventListener('load', ensureSettingsButton, { once: true });
-      return;
-    }
+    const root = document.body;
+    if (!root) return;
     mountSettingsButton(root);
   }
 
@@ -229,6 +243,8 @@
   });
 
   // gear/styles don't need __TAURI__; IPC listeners wait for it in onTauriReady
-  injectStyles();
-  ensureUi();
+  onDomReady(() => {
+    injectStyles();
+    ensureUi();
+  });
 })();

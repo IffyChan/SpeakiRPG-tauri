@@ -172,18 +172,20 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     builder.build().map(|_| ()).map_err(|e| e.to_string())
 }
 
-// window create must run on the main thread; global shortcuts and some invoke
-// paths call in from other threads and will deadlock on WebviewWindowBuilder::build
+// window create must run on the main thread. Shortcut handlers also run there;
+// calling run_on_main_thread from the main thread deadlocks the event loop.
 fn schedule_open_settings(app: &AppHandle) {
     let app = app.clone();
-    let handle = app.clone();
-    if let Err(err) = app.run_on_main_thread(move || {
-        if let Err(err) = open_settings_window(&handle) {
-            eprintln!("failed to open settings window: {err}");
+    std::thread::spawn(move || {
+        let handle = app.clone();
+        if let Err(err) = app.run_on_main_thread(move || {
+            if let Err(err) = open_settings_window(&handle) {
+                eprintln!("failed to open settings window: {err}");
+            }
+        }) {
+            eprintln!("failed to schedule settings window: {err}");
         }
-    }) {
-        eprintln!("failed to schedule settings window: {err}");
-    }
+    });
 }
 
 #[tauri::command]

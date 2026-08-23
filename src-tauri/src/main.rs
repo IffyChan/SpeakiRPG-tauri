@@ -66,8 +66,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            translate_target: "ru".into(),
-            translate_enabled: true,
+            translate_target: "en".into(),
+            translate_enabled: false,
             translate_own: false,
             translate_provider: "mymemory".into(),
             translate_endpoint: String::new(),

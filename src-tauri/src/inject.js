@@ -3,8 +3,8 @@
   window.__SPEAKI_RPG_INJECTED__ = true;
 
   let settings = {
-    translateTarget: 'ru',
-    translateEnabled: true,
+    translateTarget: 'en',
+    translateEnabled: false,
     translateOwn: false,
     ...(window.__SPEAKI_SETTINGS__ || {}),
   };

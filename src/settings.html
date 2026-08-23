@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeakiRPG Settings</title>
+    <style>
+        :root {
+            color-scheme: dark;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px 22px 16px;
+            font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+            background: #171a21;
+            color: #d7dce4;
+            user-select: none;
+        }
+
+        h1 {
+            margin: 0 0 4px;
+            font-size: 18px;
+            color: #fff;
+        }
+
+        .version {
+            margin: 0 0 18px;
+            font-size: 12px;
+            color: #7a828e;
+        }
+
+        section {
+            margin-bottom: 20px;
+            padding: 14px 16px;
+            background: #1e222b;
+            border: 1px solid #2a2f3a;
+            border-radius: 8px;
+        }
+
+        h2 {
+            margin: 0 0 10px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #9aa3b0;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 12px;
+        }
+
+        label:last-child {
+            margin-bottom: 0;
+        }
+
+        select {
+            width: 100%;
+            margin-top: 6px;
+            padding: 7px 10px;
+            font: inherit;
+            color: inherit;
+            background: #262b36;
+            border: 1px solid #3a4150;
+            border-radius: 6px;
+        }
+
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+
+        .check input {
+            width: 16px;
+            height: 16px;
+            accent-color: #5b8cff;
+        }
+
+        .hint {
+            margin: 10px 0 0;
+            font-size: 12px;
+            color: #7a828e;
+        }
+
+        button {
+            padding: 8px 14px;
+            font: inherit;
+            color: #fff;
+            background: #2c3444;
+            border: 1px solid #3a4150;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #354055;
+        }
+
+        #status {
+            position: fixed;
+            right: 16px;
+            bottom: 12px;
+            font-size: 12px;
+            color: #6fd18a;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        #status.error {
+            color: #e07a7a;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>SpeakiRPG</h1>
+    <p class="version">Settings apply instantly, no restart needed</p>
+
+    <section>
+        <h2>Chat translation</h2>
+        <label>
+            Translate into
+            <select id="target"></select>
+        </label>
+        <label class="check">
+            <input type="checkbox" id="enabled">
+            <span>Translate chat messages</span>
+        </label>
+        <label class="check">
+            <input type="checkbox" id="own">
+            <span>Translate my own messages</span>
+        </label>
+        <p class="hint">
+            Source language is detected automatically (Korean, Japanese, English, ...).
+            Translated text replaces the line, the original stays in brackets.
+        </p>
+    </section>
+
+    <section>
+        <h2>Mods</h2>
+        <p class="hint" style="margin: 0 0 10px;">
+            Drop <code>.js</code> files into the mods folder. They run on every page load,
+            in filename order. See README for the <code>SpeakiRPG</code> mod API.
+        </p>
+        <button id="openMods">Open mods folder</button>
+    </section>
+
+    <div id="status"></div>
+
+    <script>
+        const LANGUAGES = [
+            ['ru', 'Russian'],
+            ['en', 'English'],
+            ['uk', 'Ukrainian'],
+            ['de', 'German'],
+            ['fr', 'French'],
+            ['es', 'Spanish'],
+            ['pt', 'Portuguese'],
+            ['it', 'Italian'],
+            ['pl', 'Polish'],
+            ['tr', 'Turkish'],
+            ['ja', 'Japanese'],
+            ['ko', 'Korean'],
+            ['zh-CN', 'Chinese (Simplified)'],
+            ['id', 'Indonesian'],
+            ['vi', 'Vietnamese'],
+            ['th', 'Thai'],
+        ];
+
+        const $ = (id) => document.getElementById(id);
+        let statusTimer = null;
+
+        function status(text, isError) {
+            const el = $('status');
+            el.textContent = text;
+            el.classList.toggle('error', !!isError);
+            el.style.opacity = '1';
+            clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => (el.style.opacity = '0'), 2000);
+        }
+
+        function fillSelect(value) {
+            const select = $('target');
+            const known = LANGUAGES.some(([code]) => code === value);
+            const options = known ? LANGUAGES : [...LANGUAGES, [value, value]];
+            select.innerHTML = options
+                .map(([code, label]) => `<option value="${code}">${label}</option>`)
+                .join('');
+            select.value = value;
+        }
+
+        async function refresh() {
+            const settings = await window.__TAURI__.core.invoke('get_settings');
+            fillSelect(settings.translateTarget);
+            $('enabled').checked = settings.translateEnabled;
+            $('own').checked = settings.translateOwn;
+        }
+
+        async function save() {
+            const settings = {
+                translateTarget: $('target').value,
+                translateEnabled: $('enabled').checked,
+                translateOwn: $('own').checked,
+            };
+            try {
+                await window.__TAURI__.core.invoke('set_settings', { settings });
+                status('saved');
+            } catch (err) {
+                status(String(err), true);
+            }
+        }
+
+        $('target').addEventListener('change', save);
+        $('enabled').addEventListener('change', save);
+        $('own').addEventListener('change', save);
+
+        $('openMods').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('open_mods_folder');
+            } catch (err) {
+                status(String(err), true);
+            }
+        });
+
+        // keep in sync with hotkey toggles happening in the game window
+        window.__TAURI__.event.listen('settings-changed', refresh);
+
+        refresh();
+    </script>
+</body>
+
+</html>

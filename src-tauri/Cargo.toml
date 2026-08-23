@@ -2,7 +2,7 @@
 name = "speakirpg"
 version = "1.0.4"
 description = "Speaki RPG Desktop Client with Discord Rich Presence"
-authors = ["IffyChan"]
+authors = ["IffyChan <ifchan@yandex.ru>"]
 license = "GPL-3.0"
 repository = "https://github.com/IffyChan/SpeakiRPG-tauri"
 edition = "2021"
@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
 discord-rich-presence = "1.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }

@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    sync::Mutex,
+    sync::{Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,17 +11,17 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_opener::OpenerExt;
 
 mod translate;
 
 use translate::Translator;
 
-// same Discord app as Electron; swap for your own (see README)
-const CLIENT_ID: &str = "861430403955949569";
+const CLIENT_ID: &str = "1540927437523779696";
 const GAME_URL: &str = "https://speakirpg.overture.io.kr/";
 const RELEASES_URL: &str = "https://github.com/IffyChan/SpeakiRPG-tauri/releases";
 
-// Electron MIN_UPDATE_INTERVAL_MS
+// same throttle as MIN_UPDATE_INTERVAL_MS in Electron
 const MIN_UPDATE_INTERVAL_MS: u64 = 10_000;
 
 // ported verbatim from Electron
@@ -45,12 +45,14 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-// settings.json in app config dir (e.g. %APPDATA%/com.ifchan.speakirpg on Windows)
+// live in RwLock; settings window and hotkeys push via settings-changed
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
-struct Settings {
-    translate_target: String,
-    translate_enabled: bool,
+pub struct Settings {
+    pub translate_target: String,
+    pub translate_enabled: bool,
+    // off by default; you already know what you typed
+    pub translate_own: bool,
 }
 
 impl Default for Settings {
@@ -58,31 +60,114 @@ impl Default for Settings {
         Self {
             translate_target: "ru".into(),
             translate_enabled: true,
+            translate_own: false,
         }
     }
 }
 
+fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("settings.json"))
+}
+
 fn load_settings(app: &AppHandle) -> Settings {
     let defaults = Settings::default();
-    let Some(config_dir) = app.path().app_config_dir().ok() else {
+    let Some(path) = settings_path(app) else {
         return defaults;
     };
 
-    let path = config_dir.join("settings.json");
     if let Ok(json) = std::fs::read_to_string(&path) {
         match serde_json::from_str::<Settings>(&json) {
             Ok(settings) => return settings,
-            Err(err) => eprintln!("settings.json parse error, using defaults: {err}"),
+            Err(err) => eprintln!("settings.json is unreadable, using defaults: {err}"),
         }
     }
 
-    // write defaults on first run so the file can be edited by hand
-    if std::fs::create_dir_all(&config_dir).is_ok() {
-        if let Ok(json) = serde_json::to_string_pretty(&defaults) {
-            let _ = std::fs::write(&path, format!("{json}\n"));
+    // write defaults on first run for hand-editing
+    if let Some(dir) = path.parent() {
+        if std::fs::create_dir_all(dir).is_ok() {
+            if let Ok(json) = serde_json::to_string_pretty(&defaults) {
+                let _ = std::fs::write(&path, format!("{json}\n"));
+            }
         }
     }
     defaults
+}
+
+fn persist_settings(app: &AppHandle, settings: &Settings) {
+    if let Some(path) = settings_path(app) {
+        if let Ok(json) = serde_json::to_string_pretty(settings) {
+            // in-memory copy wins if disk write fails
+            let _ = std::fs::write(&path, format!("{json}\n"));
+        }
+    }
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<RwLock<Settings>>) -> Settings {
+    state.read().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_settings(
+    app: AppHandle,
+    state: tauri::State<RwLock<Settings>>,
+    settings: Settings,
+) -> Result<(), String> {
+    // bad language code would break every translate call
+    let target = settings.translate_target.trim().to_lowercase();
+    let valid = (2..=8).contains(&target.len())
+        && target.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !valid {
+        return Err("invalid translateTarget".into());
+    }
+    let settings = Settings {
+        translate_target: target,
+        ..settings
+    };
+
+    *state.write().unwrap() = settings.clone();
+    persist_settings(&app, &settings);
+    app.emit("settings-changed", &settings)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_mods_folder(app: AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("mods");
+    // creates mods/ on first click if missing
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+fn open_settings_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        return window.set_focus().map_err(|e| e.to_string());
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "settings",
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("SpeakiRPG Settings")
+    .inner_size(420.0, 540.0)
+    .resizable(false)
+    .build()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    open_settings_window(&app)
 }
 
 fn load_mod_scripts(app: &AppHandle) -> String {
@@ -93,7 +178,7 @@ fn load_mod_scripts(app: &AppHandle) -> String {
 
     let mods_dir = config_dir.join("mods");
     let Ok(entries) = std::fs::read_dir(&mods_dir) else {
-        return scripts; // mods dir often missing
+        return scripts; // no mods folder yet
     };
 
     let mut paths: Vec<_> = entries
@@ -101,16 +186,16 @@ fn load_mod_scripts(app: &AppHandle) -> String {
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
         .collect();
-    paths.sort(); // stable load order
+    paths.sort(); // stable mod load order
 
     for path in paths {
         match std::fs::read_to_string(&path) {
             Ok(code) => {
-                println!("Loaded mod: {}", path.display());
+                println!("loaded mod: {}", path.display());
                 scripts.push_str("\n;\n");
                 scripts.push_str(&code);
             }
-            Err(err) => eprintln!("Failed to read mod {}: {err}", path.display()),
+            Err(err) => eprintln!("failed to read mod {}: {err}", path.display()),
         }
     }
     scripts
@@ -133,7 +218,6 @@ impl DiscordRpc {
         match self.client.as_mut().map(DiscordIpc::connect) {
             Some(Ok(())) => true,
             _ => {
-                // stale socket after failed connect
                 self.client = None;
                 false
             }
@@ -155,7 +239,7 @@ impl DiscordRpc {
         if self.connect() && self.try_set(&activity) {
             return true;
         }
-        eprintln!("Failed to update RPC activity");
+        eprintln!("failed to update RPC activity");
         false
     }
 }
@@ -213,7 +297,7 @@ fn stats_activity(stats: &PageStats, start_ms: u64) -> activity::Activity<'stati
 struct AppState {
     rpc: Mutex<DiscordRpc>,
     last_update_ms: Mutex<u64>,
-    // Electron rpcTimestamp: presence elapsed time counts from app start
+    // Electron rpcTimestamp
     session_start_ms: u64,
 }
 
@@ -238,16 +322,16 @@ impl PageStats {
 #[tauri::command]
 fn update_stats(state: tauri::State<AppState>, stats: PageStats, manual: bool) {
     if stats.is_empty() {
-        // no player card on page yet, ignore
+        // no player card yet, ignore
         return;
     }
 
-    // Ctrl+Shift+D passes manual=true and skips throttle
+    // manual=true skips throttle
     if !manual {
         let mut last = state.last_update_ms.lock().unwrap();
         let now = now_millis();
         if now.saturating_sub(*last) < MIN_UPDATE_INTERVAL_MS {
-            println!("Update throttled; skipping");
+            println!("update throttled, skipping");
             return;
         }
         *last = now;
@@ -258,7 +342,7 @@ fn update_stats(state: tauri::State<AppState>, stats: PageStats, manual: bool) {
     let mut rpc = state.rpc.lock().unwrap();
     if rpc.set_activity(activity) {
         println!(
-            "RPC activity updated: name={:?} level={:?}",
+            "rpc activity updated: name={:?} level={:?}",
             stats.player_name, stats.level
         );
     }
@@ -266,18 +350,23 @@ fn update_stats(state: tauri::State<AppState>, stats: PageStats, manual: bool) {
 
 #[tauri::command]
 async fn translate_text(
+    settings: tauri::State<'_, RwLock<Settings>>,
     translator: tauri::State<'_, Translator>,
     text: String,
 ) -> Result<String, String> {
-    translator.translate(&text).await
+    let target = settings.read().unwrap().translate_target.clone();
+    translator.translate(&text, &target).await
 }
 
+#[derive(Clone, Copy)]
 enum ShortcutAction {
     Reload,
     RefreshStats,
     ToggleTranslation,
+    OpenSettings,
 }
 
+// Cmd on macOS, Ctrl elsewhere
 #[cfg(target_os = "macos")]
 const CMD_OR_CTRL: Modifiers = Modifiers::SUPER;
 #[cfg(not(target_os = "macos"))]
@@ -298,21 +387,42 @@ fn shortcut_set() -> Vec<(Shortcut, ShortcutAction)> {
             Shortcut::new(Some(CMD_OR_CTRL | Modifiers::SHIFT), Code::KeyT),
             ShortcutAction::ToggleTranslation,
         ),
+        (
+            Shortcut::new(Some(CMD_OR_CTRL | Modifiers::SHIFT), Code::KeyS),
+            ShortcutAction::OpenSettings,
+        ),
     ]
 }
 
 fn handle_shortcut(app: &AppHandle, action: ShortcutAction) {
-    if let Some(window) = app.get_webview_window("main") {
-        match action {
-            ShortcutAction::Reload => {
+    match action {
+        ShortcutAction::Reload => {
+            if let Some(window) = app.get_webview_window("main") {
                 let _ = window.eval("window.location.reload()");
             }
-            // DOM read in inject.js; Rust emits refresh-stats
-            ShortcutAction::RefreshStats => {
+        }
+        ShortcutAction::RefreshStats => {
+            if let Some(window) = app.get_webview_window("main") {
                 let _ = window.emit("refresh-stats", ());
             }
-            ShortcutAction::ToggleTranslation => {
-                let _ = window.emit("toggle-translation", ());
+        }
+        ShortcutAction::ToggleTranslation => {
+            // toggle in Rust so settings window and inject.js stay in sync
+            let state = app.state::<RwLock<Settings>>();
+            let mut settings = state.write().unwrap();
+            settings.translate_enabled = !settings.translate_enabled;
+            let snapshot = settings.clone();
+            drop(settings);
+            persist_settings(app, &snapshot);
+            let _ = app.emit("settings-changed", &snapshot);
+            println!(
+                "chat translation {}",
+                if snapshot.translate_enabled { "on" } else { "off" }
+            );
+        }
+        ShortcutAction::OpenSettings => {
+            if let Err(err) = open_settings_window(app) {
+                eprintln!("failed to open settings window: {err}");
             }
         }
     }
@@ -321,13 +431,21 @@ fn handle_shortcut(app: &AppHandle, action: ShortcutAction) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_stats, translate_text])
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            update_stats,
+            translate_text,
+            get_settings,
+            set_settings,
+            open_mods_folder,
+            open_settings
+        ])
         .setup(|app| {
             let app_handle = app.handle().clone();
 
             let settings = load_settings(&app_handle);
-            let translator = Translator::new(settings.translate_target.clone());
-            app.manage(translator);
+            app.manage(RwLock::new(settings.clone()));
+            app.manage(Translator::new());
 
             app.manage(AppState {
                 rpc: Mutex::new(DiscordRpc::new()),
@@ -335,10 +453,9 @@ fn main() {
                 session_start_ms: now_millis(),
             });
 
-            // WebviewWindowBuilder only: initialization_script + init order matters
-            // __SPEAKI_SETTINGS__ -> inject.js -> config/mods/*.js
+            // WebviewWindowBuilder only: init order is settings snapshot, inject.js, mods
             let settings_json = serde_json::to_string(&settings)
-                .unwrap_or_else(|_| "{translateTarget:\"ru\",translateEnabled:true}".into());
+                .unwrap_or_else(|_| "{}".into());
             let mods = load_mod_scripts(&app_handle);
 
             let window = WebviewWindowBuilder::new(
@@ -349,6 +466,7 @@ fn main() {
             .title("SpeakiRPG")
             .inner_size(1920.0, 1080.0)
             .center()
+            // runs on every navigation; inject.js pushes to Rust (eval can't return DOM)
             .initialization_script(format!(
                 "window.__SPEAKI_SETTINGS__ = {settings_json};"
             ))
@@ -356,7 +474,7 @@ fn main() {
             .initialization_script(mods)
             .build()?;
 
-            // shortcuts only while focused (Electron focus/blur register pattern)
+            // register shortcuts only while focused so F5 isn't stolen from other apps
             let app_handle = app.handle().clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Focused(true) => {
@@ -380,7 +498,7 @@ fn main() {
                 _ => {}
             });
 
-            // don't block window open on Discord IPC; it may not be running yet
+            // don't block window open on Discord IPC
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let state = app_handle.state::<AppState>();

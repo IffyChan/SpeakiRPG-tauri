@@ -1,6 +1,5 @@
-//! Google Translate gtx client. HTTP runs in Rust because the game page can't call
-//! gtx (CORS) and we cache translations across page reloads. Unofficial endpoint;
-//! swap Translator internals if Google rate-limits it.
+//! Google gtx client. HTTP in Rust because the game page can't call gtx (CORS).
+//! Cache survives page reloads. Swap this module if Google rate-limits the endpoint.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -11,11 +10,10 @@ const GTX_URL: &str = "https://translate.googleapis.com/translate_a/single";
 pub struct Translator {
     client: reqwest::Client,
     cache: Mutex<HashMap<String, String>>,
-    pub target: String,
 }
 
 impl Translator {
-    pub fn new(target: String) -> Self {
+    pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -23,18 +21,17 @@ impl Translator {
         Self {
             client,
             cache: Mutex::new(HashMap::new()),
-            target,
         }
     }
 
-    // gtx shape: [[["translated","source",...],...], ...]; concatenate segment [0] values
-    pub async fn translate(&self, text: &str) -> Result<String, String> {
+    // gtx shape: [[["translated","source",...],...], ...]; sl=auto for mixed chat langs
+    pub async fn translate(&self, text: &str, target: &str) -> Result<String, String> {
         let text = text.trim();
         if text.is_empty() {
             return Ok(String::new());
         }
 
-        let cache_key = format!("{}::{}", self.target, text);
+        let cache_key = format!("{target}::{text}");
         if let Some(hit) = self.cache.lock().unwrap().get(&cache_key) {
             return Ok(hit.clone());
         }
@@ -45,7 +42,7 @@ impl Translator {
             .query(&[
                 ("client", "gtx"),
                 ("sl", "auto"),
-                ("tl", self.target.as_str()),
+                ("tl", target),
                 ("dt", "t"),
                 ("q", text),
             ])

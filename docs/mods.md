@@ -23,12 +23,13 @@ URL: https://speakirpg.overture.io.kr/
 initialization_script, in order:
   1. settings bootstrap (`__SPEAKI_SETTINGS__`, `disabledMods`)
   2. game-state-capture.js (if enabled in settings)
-  3. inject.js  -> window.SpeakiRPG API
+  3. inject.js  -> window.SpeakiRPG API, then loads user mods from disk
   4. bundled example mods (from the .exe via include_str!)
-  5. user mods from `<config dir>/mods/*.js` (everything except the two examples)
 ```
 
-Scripts run in the game page context, not in `settings.html`. Mods load on every full page load (`F5`). Disable/enable in Settings applies after reload; the client keeps the latest `disabledMods` in `sessionStorage` so toggles survive `F5` without restarting the app. A mod crash is caught per listener, so it won't take down translation.
+User mods (`speakihax-lite.js`, etc.) are read from `<config dir>/mods/` on **every page load** (F5), not baked into the `.exe`. After editing a user mod, F5 is enough — no full app restart.
+
+Scripts run in the game page context, not in `settings.html`. On cold start the local splash (`index.html`) waits for hooks + user mods before opening the game site. Disable/enable in Settings applies after reload (`F5` on the game page).
 
 **Bundled with the release** (only these two ship inside the `.exe`; `src-tauri/mods/`):
 

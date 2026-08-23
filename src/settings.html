@@ -247,6 +247,18 @@
     </section>
 
     <section>
+        <h2>Developer</h2>
+        <label class="check">
+            <input type="checkbox" id="captureGameState">
+            <span>Expose game client to mods (gameState capture)</span>
+        </label>
+        <p class="hint">
+            Advanced modding only. Patches the game bundle on load; may break after a game update.
+            Reload the game (F5) after toggling.
+        </p>
+    </section>
+
+    <section>
         <h2>Mods</h2>
         <p class="hint" style="margin: 0 0 10px;">
             Small scripts that hook chat, stats, and translation. See
@@ -358,6 +370,7 @@
                           ? $('customApiKey').value
                           : '',
                 translatePostBody: $('postBody').value,
+                captureGameState: $('captureGameState').checked,
                 disabledMods: cachedSettings?.disabledMods ?? [],
                 ...overrides,
             };
@@ -368,6 +381,7 @@
             fillSelect(cachedSettings.translateTarget);
             $('enabled').checked = cachedSettings.translateEnabled;
             $('own').checked = cachedSettings.translateOwn;
+            $('captureGameState').checked = !!cachedSettings.captureGameState;
             $('provider').value = cachedSettings.translateProvider || 'mymemory';
             $('apiKey').value = cachedSettings.translateApiKey || '';
             $('endpoint').value = cachedSettings.translateEndpoint || '';
@@ -400,6 +414,7 @@
         $('target').addEventListener('change', save);
         $('enabled').addEventListener('change', save);
         $('own').addEventListener('change', save);
+        $('captureGameState').addEventListener('change', save);
         $('provider').addEventListener('change', () => {
             syncProviderUi($('provider').value);
             save();

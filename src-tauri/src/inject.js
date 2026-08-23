@@ -6,6 +6,7 @@
     translateTarget: 'en',
     translateEnabled: false,
     translateOwn: false,
+    captureGameState: false,
     ...(window.__SPEAKI_SETTINGS__ || {}),
   };
 
@@ -23,6 +24,7 @@
     target: [],
     dialog: [],
     emote: [],
+    gameStateReady: [],
   };
 
   const SELECTORS = Object.freeze({
@@ -83,6 +85,15 @@
     }
   }
 
+  const gameStateBridge =
+    typeof window.__speakiInstallGameStateCapture === 'function'
+      ? window.__speakiInstallGameStateCapture(emitTo, () => settings)
+      : null;
+
+  if (gameStateBridge) {
+    gameStateBridge.syncCaptureEnabled();
+  }
+
   window.SpeakiRPG = {
     version: '1.0.5',
     selectors: SELECTORS,
@@ -128,6 +139,51 @@
     },
     translate(text) {
       return window.__TAURI__.core.invoke('translate_text', { text });
+    },
+    getGameState() {
+      return window.gameState ?? null;
+    },
+    isGameStateReady() {
+      return gameStateBridge ? gameStateBridge.isGameStateReady() : false;
+    },
+    get gameStateStatus() {
+      return gameStateBridge ? gameStateBridge.getCaptureStatus() : 'disabled';
+    },
+    get gameStateCaptureFailReason() {
+      return gameStateBridge ? gameStateBridge.getCaptureFailReason() : null;
+    },
+    whenGameState(cb) {
+      if (gameStateBridge) gameStateBridge.whenGameState(cb);
+    },
+    bootGameStateMod(name, init) {
+      if (!gameStateBridge) {
+        console.error(`[${name}] gameState capture not available`);
+        return;
+      }
+      if (!settings.captureGameState) {
+        console.warn(`[${name}] enable gameState capture in Settings, then F5`);
+        return;
+      }
+      gameStateBridge.whenGameState((gs) => {
+        const run = () => {
+          try {
+            init(gs);
+          } catch (err) {
+            console.error(`[${name}] init failed:`, err);
+          }
+        };
+        if (document.body) run();
+        else {
+          const poll = () => {
+            if (document.body) run();
+            else setTimeout(poll, 50);
+          };
+          poll();
+        }
+      });
+    },
+    listMonsterNames() {
+      return gameStateBridge ? gameStateBridge.listMonsterNames() : [];
     },
   };
 
@@ -507,6 +563,7 @@
     window.__TAURI__.event.listen('settings-changed', (event) => {
       settings = { ...settings, ...event.payload };
       emitTo('settings', { ...settings });
+      if (gameStateBridge) gameStateBridge.syncCaptureEnabled();
       const log = document.querySelector(CHAT_LOG_SELECTOR);
       if (log) rescanChatForTranslation(log);
     });

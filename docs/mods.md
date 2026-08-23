@@ -42,8 +42,10 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 **Properties**
 
 - `version` - client version string
-- `settings` - read-only client settings (`translateTarget`, `translateEnabled`, ...)
+- `settings` - read-only client settings (`translateTarget`, `translateEnabled`, `captureGameState`, ...)
 - `selectors` - frozen map of confirmed CSS selectors (below)
+- `gameStateStatus` - `disabled` | `pending` | `patched` | `ready` | `patch_failed` (see below)
+- `gameStateCaptureFailReason` - string when capture failed, else `null`
 
 **Methods** (snapshot reads, call anytime after the HUD exists - return `null` if the root node isn't in the DOM yet)
 
@@ -54,6 +56,11 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 - `clickEmoteSlot()` - clicks `.sr-emote-slot` on the hotbar, returns `false` if the slot's missing
 - `query(selector)` / `queryAll(selector)` - `querySelector` / `querySelectorAll` (array)
 - `translate(text)` - `Promise<string>`, built-in backend
+- `getGameState()` - live game client when capture is ready, else `null`
+- `isGameStateReady()` - boolean
+- `whenGameState(cb)` - run when `gameState` is available (see Advanced)
+- `bootGameStateMod(name, init)` - same, but waits for `document.body` (for HUD mods)
+- `listMonsterNames()` - mob names from `gameState` when ready, else `[]`
 - `on(event, cb)` - subscribe, returns `unsubscribe()`
 
 **Events**
@@ -67,8 +74,26 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 | `emote` | chat line matches emote heuristic | `(message, rowElement)` |
 | `stats` | Discord stats tick (~30s, 5min, `Ctrl+Shift+D`) | `(stats)` |
 | `settings` | client settings changed | `(settings)` |
+| `gameStateReady` | game client captured (capture on) | `(gameState)` |
 
 `player` / `target` / `dialog` use live observers. `stats` follows the Discord poll schedule - use `player` if you want a fresh name/level.
+
+### Advanced: gameState capture (opt-in)
+
+Off by default. **Settings → Developer → Expose game client to mods**, then **F5**.
+
+The client patches `/assets/index-*.js` on load so `window.gameState` exists (same as the SpeakiMod DevTools breakpoint). Mods must defer:
+
+```js
+SpeakiRPG.whenGameState((gs) => {
+  console.log('[mod] hp', gs.myStat?.hp);
+});
+
+// or, if the mod mounts DOM on init:
+SpeakiRPG.bootGameStateMod('my-mod', (gs) => { /* ... */ });
+```
+
+Can break on game updates (`SpeakiRPG.gameStateStatus === 'patch_failed'`). Maintainer notes: `docs/secret/gamestate.md`.
 
 ### `SpeakiRPG.selectors`
 
@@ -253,8 +278,8 @@ No built-in skill/cast observers - poll if you need it, or PR an `on('skill')`.
 
 ## What you can and can't do
 
-Works: chat/HUD/target/NPC dialog, styling the DOM, translation and client settings, clicking the emote slot.
-Doesn't work: emote picker in the DOM, game network access, 3D positions (it's a canvas). Assume any of this can break on a game update.
+Works: chat/HUD/target/NPC dialog, styling the DOM, translation and client settings, clicking the emote slot. With opt-in capture: read `gameState` (monsters, combat assist, etc.) via `whenGameState`.
+Doesn't work: emote picker in the DOM. Without capture: no direct game client. Assume selectors or patch sites can break on a game update.
 
 ## Debugging
 
@@ -274,6 +299,9 @@ Doesn't work: emote picker in the DOM, game network access, 3D positions (it's a
 | `needsRevive` stuck true | revive pill stays in HTML while alive - API uses `hpCurrent === 0` instead |
 | RU chat shows target `en` | turn on translation, Cyrillic passes through as-is when target is `ru`/`uk` |
 | RU text + `(hello)` | that's a translated line, brackets hold the original |
+| `gameStateStatus` stays `disabled` | enable capture in Settings, F5 |
+| `patch_failed` after game update | see `docs/secret/gamestate.md` (manual breakpoint fallback) |
+| `whenGameState` never runs | log in after capture; wait until status is `ready` |
 
 **Hotkeys**
 
@@ -284,6 +312,7 @@ Doesn't work: emote picker in the DOM, game network access, 3D positions (it's a
 ## For contributors
 
 - `src-tauri/src/inject.js` - API, observers, translation
+- `src-tauri/src/game-state-capture.js` - opt-in gameState fetch patch
 - `src-tauri/src/main.rs` - mods, settings window
 - `src-tauri/mods/example-*.js` - bundled samples
 - `docs/secret/` - gitignored dumps + `dom-audit-body2.md`

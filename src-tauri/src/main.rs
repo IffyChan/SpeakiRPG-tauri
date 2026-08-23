@@ -59,6 +59,9 @@ pub struct Settings {
     pub translate_json_path: String,
     pub translate_api_key: String,
     pub translate_post_body: String,
+    // opt-in: patch game bundle to expose window.gameState for advanced mods
+    #[serde(default)]
+    pub capture_game_state: bool,
     #[serde(default)]
     pub disabled_mods: Vec<String>,
 }
@@ -74,6 +77,7 @@ impl Default for Settings {
             translate_json_path: String::new(),
             translate_api_key: String::new(),
             translate_post_body: String::new(),
+            capture_game_state: false,
             disabled_mods: Vec::new(),
         }
     }
@@ -653,6 +657,7 @@ fn main() {
             .initialization_script(format!(
                 "window.__SPEAKI_SETTINGS__ = {settings_json};"
             ))
+            .initialization_script(include_str!("game-state-capture.js"))
             .initialization_script(include_str!("inject.js"))
             .initialization_script(mods)
             .build()?;

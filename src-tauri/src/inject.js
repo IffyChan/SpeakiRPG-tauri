@@ -78,9 +78,33 @@
       .catch((err) => console.error('[SpeakiRPG] update_stats failed:', err));
   }
 
-  const HANGUL = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/;
+  const KOREAN = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/;
+  const JAPANESE = /[\u3040-\u309F\u30A0-\u30FF\uFF65-\uFF9F]/;
+  const CJK = /[\u4E00-\u9FFF\u3400-\u4DBF]/;
+  const CYRILLIC = /[\u0400-\u04FF]/;
+  const LATIN = /[A-Za-z\u00C0-\u024F]/;
   const CHAT_LOG_SELECTOR = '.sr-chatbox__log';
   const MAX_TEXT_LENGTH = 450; // gtx GET; long strings won't fit the URL
+
+  function shouldTranslate(text, isMine) {
+    if (text.length > MAX_TEXT_LENGTH) return false;
+    if (!/\p{L}/u.test(text)) return false;
+
+    const hasEastAsian = KOREAN.test(text) || JAPANESE.test(text) || CJK.test(text);
+    if (hasEastAsian) return true;
+
+    const target = settings.translateTarget;
+    const hasLatin = LATIN.test(text);
+    const hasCyrillic = CYRILLIC.test(text);
+
+    // own Latin lines (e.g. English) when the user opted in
+    if (isMine && settings.translateOwn && hasLatin && target !== 'en') return true;
+
+    // occasional English from others when target is Cyrillic
+    if (!isMine && hasLatin && !hasCyrillic && target === 'ru') return true;
+
+    return false;
+  }
 
   // init script runs before <html>; head and documentElement can both be null
   function onDomReady(callback) {
@@ -120,18 +144,40 @@
     mount.appendChild(style);
   }
 
-  // one in flight, 150ms gap so a busy chat doesn't hammer gtx
+  // one in flight; gap keeps gtx from 429-ing on chat bursts
   let translationQueue = Promise.resolve();
   let lastTranslationAt = 0;
+  let translateBackoffUntil = 0;
+  const TRANSLATE_GAP_MS = 400;
+  const translationMemory = new Map();
 
   function translateText(text) {
+    const cacheKey = `${settings.translateTarget}::${text}`;
+    if (translationMemory.has(cacheKey)) {
+      return Promise.resolve(translationMemory.get(cacheKey));
+    }
+
     translationQueue = translationQueue.then(async () => {
-      const wait = Math.max(0, 150 - (Date.now() - lastTranslationAt));
+      const now = Date.now();
+      const backoffWait = Math.max(0, translateBackoffUntil - now);
+      const gapWait = Math.max(0, TRANSLATE_GAP_MS - (now - lastTranslationAt));
+      const wait = Math.max(backoffWait, gapWait);
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+
+      if (translationMemory.has(cacheKey)) {
+        return translationMemory.get(cacheKey);
+      }
+
       lastTranslationAt = Date.now();
       try {
-        return await window.__TAURI__.core.invoke('translate_text', { text });
+        const translated = await window.__TAURI__.core.invoke('translate_text', { text });
+        if (translated) translationMemory.set(cacheKey, translated);
+        return translated;
       } catch (err) {
+        const message = String(err);
+        if (message.includes('429')) {
+          translateBackoffUntil = Date.now() + 60_000;
+        }
         console.error('[SpeakiRPG] translate_text failed:', err);
         return null;
       }
@@ -153,9 +199,9 @@
     }
   }
 
-  function decorateRow(row) {
-    if (row.dataset.srHandled) return;
-    row.dataset.srHandled = '1';
+  function processRow(row) {
+    if (!row.classList.contains('sr-chatbox__row')) return;
+    if (row.querySelector('.sr-translate-original')) return;
 
     const isSystem = row.classList.contains('sr-chatbox__system-text');
     const body = isSystem ? null : row.querySelector('.sr-chatbox__body-text');
@@ -163,33 +209,66 @@
     if (!text) return;
 
     const isMine = !isSystem && !!row.querySelector('.sr-chatbox__sender--mine');
-    emitTo('chat', { sender: row.dataset.playerName ?? null, text, isMine, isSystem }, row);
+    if (!row.dataset.srSeen) {
+      row.dataset.srSeen = '1';
+      emitTo('chat', { sender: row.dataset.playerName ?? null, text, isMine, isSystem }, row);
+    }
 
     if (!settings.translateEnabled) return;
-    if (!HANGUL.test(text) || text.length > MAX_TEXT_LENGTH) return;
-    if (isMine && !settings.translateOwn) return;
+    if (!shouldTranslate(text, isMine)) return;
+    if (row.dataset.srTranslatePending) return;
 
+    const cacheKey = `${settings.translateTarget}::${text}`;
+    if (translationMemory.has(cacheKey)) {
+      const cached = translationMemory.get(cacheKey);
+      if (cached && cached !== text) {
+        applyTranslation(row, isSystem ? row : body, text, cached);
+      }
+      return;
+    }
+
+    row.dataset.srTranslatePending = '1';
     translateText(text).then((translated) => {
-      if (translated) applyTranslation(row, isSystem ? row : body, text, translated);
+      if (!translated || translated === text) {
+        delete row.dataset.srTranslatePending;
+        return;
+      }
+      if (row.querySelector('.sr-translate-original')) return;
+      applyTranslation(row, isSystem ? row : body, text, translated);
     });
+  }
+
+  function rescanChatForTranslation(log) {
+    for (const row of log.querySelectorAll('.sr-chatbox__row')) {
+      if (row.querySelector('.sr-translate-original')) continue;
+      delete row.dataset.srTranslatePending;
+      processRow(row);
+    }
+  }
+
+  function scanChatLog(log) {
+    for (const row of log.querySelectorAll('.sr-chatbox__row')) {
+      processRow(row);
+    }
   }
 
   function observeChat() {
     const log = document.querySelector(CHAT_LOG_SELECTOR);
     if (log && !log.__srObserved) {
       log.__srObserved = true;
+      scanChatLog(log);
       new MutationObserver((mutations) => {
         for (const mutation of mutations) {
           for (const node of mutation.addedNodes) {
             if (node.nodeType !== 1) continue;
             if (node.classList && node.classList.contains('sr-chatbox__row')) {
-              decorateRow(node);
+              processRow(node);
             }
           }
         }
       }).observe(log, { childList: true });
     }
-    // chat mounts after login and can be recreated
+    // chat mounts after login; only watch for a new log element
     setTimeout(observeChat, 2000);
   }
 
@@ -231,6 +310,8 @@
     window.__TAURI__.event.listen('settings-changed', (event) => {
       settings = { ...settings, ...event.payload };
       emitTo('settings', { ...settings });
+      const log = document.querySelector(CHAT_LOG_SELECTOR);
+      if (log) rescanChatForTranslation(log);
     });
 
     // Electron intervals: 30s after load, then every 5 minutes

@@ -6,6 +6,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const GTX_URL: &str = "https://translate.googleapis.com/translate_a/single";
+// gtx expects a browser UA; bare reqwest gets 429 sooner
+const GTX_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 pub struct Translator {
     client: reqwest::Client,
@@ -39,6 +41,7 @@ impl Translator {
         let response = self
             .client
             .get(GTX_URL)
+            .header("User-Agent", GTX_USER_AGENT)
             .query(&[
                 ("client", "gtx"),
                 ("sl", "auto"),
@@ -72,7 +75,6 @@ impl Translator {
             return Err("gtx returned empty translation".into());
         }
 
-        // don't cache failures
         self.cache
             .lock()
             .unwrap()

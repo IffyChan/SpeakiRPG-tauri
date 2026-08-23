@@ -29,7 +29,7 @@ npm run build    # installer -> src-tauri/target/release/bundle/
 
 1. Run the app, log in on the game site (splash redirects automatically).
 2. Discord shows name, level, XP, and location from your character card (~30s after load, then every 5 min). Discord must be running.
-3. Chat lines with Korean text get translated in place; original text stays in muted brackets. Toggle with `Ctrl+Shift+T` or Settings (`Ctrl+Shift+S` / gear button bottom-right).
+3. Chat lines in Korean or Japanese get translated in place; original text stays in muted brackets. Toggle with `Ctrl+Shift+T` or Settings (`Ctrl+Shift+S` / gear button bottom-right).
 
 ## Shortcuts
 

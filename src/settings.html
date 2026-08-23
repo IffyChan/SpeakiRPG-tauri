@@ -68,6 +68,41 @@
             border-radius: 6px;
         }
 
+        input[type="text"],
+        input[type="password"],
+        textarea {
+            width: 100%;
+            margin-top: 6px;
+            padding: 7px 10px;
+            font: inherit;
+            color: inherit;
+            background: #262b36;
+            border: 1px solid #3a4150;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            min-height: 72px;
+            resize: vertical;
+            font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .provider-fields {
+            display: none;
+            margin-top: 12px;
+        }
+
+        .provider-fields.active {
+            display: block;
+        }
+
+        code {
+            font-size: 12px;
+            color: #b8c0cc;
+        }
+
         .check {
             display: flex;
             align-items: center;
@@ -142,6 +177,56 @@
     </section>
 
     <section>
+        <h2>Translation API</h2>
+        <label>
+            Provider
+            <select id="provider">
+                <option value="mymemory">MyMemory (free, default)</option>
+                <option value="gtx">Google GTX (unofficial)</option>
+                <option value="custom">Custom URL / local LLM</option>
+            </select>
+        </label>
+
+        <div id="provider-mymemory" class="provider-fields">
+            <label>
+                Email (optional)
+                <input type="text" id="apiKey" placeholder="you@example.com" autocomplete="off">
+            </label>
+            <p class="hint">Raises the free MyMemory quota when set. Each user uses their own limit.</p>
+        </div>
+
+        <div id="provider-gtx" class="provider-fields">
+            <p class="hint">
+                Same unofficial endpoint as the Chrome translate widget. Can rate-limit (HTTP 429);
+                switch back to MyMemory or Custom if that happens.
+            </p>
+        </div>
+
+        <div id="provider-custom" class="provider-fields">
+            <label>
+                Endpoint URL
+                <input type="text" id="endpoint" placeholder="http://127.0.0.1:5000/translate?q={text}&amp;to={target}">
+            </label>
+            <label>
+                JSON path (optional)
+                <input type="text" id="jsonPath" placeholder="responseData.translatedText">
+            </label>
+            <label>
+                API key (optional)
+                <input type="password" id="customApiKey" placeholder="{api_key} in URL/body" autocomplete="off">
+            </label>
+            <label>
+                POST JSON body (optional)
+                <textarea id="postBody" placeholder='{"q":"{text}","source":"auto","target":"{target}"}'></textarea>
+            </label>
+            <p class="hint">
+                Placeholders: <code>{text}</code>, <code>{target}</code>, <code>{source}</code>, <code>{api_key}</code>.
+                Leave POST body empty for GET. Plain-text responses work without JSON path.
+            </p>
+        </div>
+    </section>
+
+    <section>
         <h2>Mods</h2>
         <p class="hint" style="margin: 0 0 10px;">
             Drop <code>.js</code> files into the mods folder. They run on every page load,
@@ -194,18 +279,42 @@
             select.value = value;
         }
 
+        function syncProviderUi(provider) {
+            document.querySelectorAll('.provider-fields').forEach((el) => el.classList.remove('active'));
+            const panel = document.getElementById(`provider-${provider}`);
+            if (panel) panel.classList.add('active');
+        }
+
         async function refresh() {
             const settings = await window.__TAURI__.core.invoke('get_settings');
             fillSelect(settings.translateTarget);
             $('enabled').checked = settings.translateEnabled;
             $('own').checked = settings.translateOwn;
+            $('provider').value = settings.translateProvider || 'mymemory';
+            $('apiKey').value = settings.translateApiKey || '';
+            $('endpoint').value = settings.translateEndpoint || '';
+            $('jsonPath').value = settings.translateJsonPath || '';
+            $('customApiKey').value = settings.translateApiKey || '';
+            $('postBody').value = settings.translatePostBody || '';
+            syncProviderUi($('provider').value);
         }
 
         async function save() {
+            const provider = $('provider').value;
             const settings = {
                 translateTarget: $('target').value,
                 translateEnabled: $('enabled').checked,
                 translateOwn: $('own').checked,
+                translateProvider: provider,
+                translateEndpoint: $('endpoint').value,
+                translateJsonPath: $('jsonPath').value,
+                translateApiKey:
+                    provider === 'mymemory'
+                        ? $('apiKey').value
+                        : provider === 'custom'
+                          ? $('customApiKey').value
+                          : '',
+                translatePostBody: $('postBody').value,
             };
             try {
                 await window.__TAURI__.core.invoke('set_settings', { settings });
@@ -218,6 +327,15 @@
         $('target').addEventListener('change', save);
         $('enabled').addEventListener('change', save);
         $('own').addEventListener('change', save);
+        $('provider').addEventListener('change', () => {
+            syncProviderUi($('provider').value);
+            save();
+        });
+        $('apiKey').addEventListener('change', save);
+        $('endpoint').addEventListener('change', save);
+        $('jsonPath').addEventListener('change', save);
+        $('customApiKey').addEventListener('change', save);
+        $('postBody').addEventListener('change', save);
 
         $('openMods').addEventListener('click', async () => {
             try {

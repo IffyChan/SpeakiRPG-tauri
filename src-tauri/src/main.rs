@@ -15,7 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 
 mod translate;
 
-use translate::Translator;
+use translate::{TranslateConfig, Translator};
 
 const CLIENT_ID: &str = "1540927437523779696";
 const GAME_URL: &str = "https://speakirpg.overture.io.kr/";
@@ -53,6 +53,12 @@ pub struct Settings {
     pub translate_enabled: bool,
     // off by default; you already know what you typed
     pub translate_own: bool,
+    // mymemory | gtx | custom - each user brings their own quota/endpoint
+    pub translate_provider: String,
+    pub translate_endpoint: String,
+    pub translate_json_path: String,
+    pub translate_api_key: String,
+    pub translate_post_body: String,
 }
 
 impl Default for Settings {
@@ -61,8 +67,46 @@ impl Default for Settings {
             translate_target: "ru".into(),
             translate_enabled: true,
             translate_own: false,
+            translate_provider: "mymemory".into(),
+            translate_endpoint: String::new(),
+            translate_json_path: String::new(),
+            translate_api_key: String::new(),
+            translate_post_body: String::new(),
         }
     }
+}
+
+impl Settings {
+    fn translate_config(&self) -> TranslateConfig {
+        TranslateConfig {
+            provider: self.translate_provider.clone(),
+            target: self.translate_target.clone(),
+            endpoint: self.translate_endpoint.clone(),
+            json_path: self.translate_json_path.clone(),
+            api_key: self.translate_api_key.clone(),
+            post_body: self.translate_post_body.clone(),
+        }
+    }
+}
+
+fn normalize_translate_provider(provider: &str) -> Result<String, String> {
+    match provider.trim().to_lowercase().as_str() {
+        "mymemory" => Ok("mymemory".into()),
+        "gtx" | "google" | "google-gtx" => Ok("gtx".into()),
+        "custom" => Ok("custom".into()),
+        _ => Err("translateProvider must be mymemory, gtx, or custom".into()),
+    }
+}
+
+fn validate_translate_endpoint(endpoint: &str) -> Result<(), String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Ok(());
+    }
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        return Ok(());
+    }
+    Err("translateEndpoint must start with http:// or https://".into())
 }
 
 fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -123,10 +167,22 @@ fn set_settings(
     if !valid {
         return Err("invalid translateTarget".into());
     }
+    let provider = normalize_translate_provider(&settings.translate_provider)?;
+    validate_translate_endpoint(&settings.translate_endpoint)?;
+
     let settings = Settings {
         translate_target: target,
+        translate_provider: provider,
+        translate_endpoint: settings.translate_endpoint.trim().to_string(),
+        translate_json_path: settings.translate_json_path.trim().to_string(),
+        translate_api_key: settings.translate_api_key.trim().to_string(),
+        translate_post_body: settings.translate_post_body.trim().to_string(),
         ..settings
     };
+
+    if settings.translate_provider == "custom" && settings.translate_endpoint.is_empty() {
+        return Err("custom provider needs translateEndpoint".into());
+    }
 
     *state.write().unwrap() = settings.clone();
     persist_settings(&app, &settings);
@@ -159,7 +215,7 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("settings.html".into()),
     )
     .title("SpeakiRPG Settings")
-    .inner_size(420.0, 540.0)
+    .inner_size(460.0, 680.0)
     .resizable(false)
     .center();
 
@@ -378,8 +434,8 @@ async fn translate_text(
     translator: tauri::State<'_, Translator>,
     text: String,
 ) -> Result<String, String> {
-    let target = settings.read().unwrap().translate_target.clone();
-    translator.translate(&text, &target).await
+    let config = settings.read().unwrap().translate_config();
+    translator.translate(&text, &config).await
 }
 
 #[derive(Clone, Copy)]

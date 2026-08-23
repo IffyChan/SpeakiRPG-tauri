@@ -84,7 +84,7 @@
   const CYRILLIC = /[\u0400-\u04FF]/;
   const LATIN = /[A-Za-z\u00C0-\u024F]/;
   const CHAT_LOG_SELECTOR = '.sr-chatbox__log';
-  const MAX_TEXT_LENGTH = 450; // gtx GET; long strings won't fit the URL
+  const MAX_TEXT_LENGTH = 500; // MyMemory free tier per request
 
   function shouldTranslate(text, isMine) {
     if (text.length > MAX_TEXT_LENGTH) return false;
@@ -130,7 +130,7 @@
     style.id = 'sr-style';
     // 2147483647: game overlays sat above z-index 9999
     style.textContent = `
-      .sr-translate-original { opacity: 0.55; font-size: 0.92em; }
+      .sr-translate-original { color: rgba(255, 255, 255, 0.78); font-size: 0.92em; }
       #sr-settings-btn {
         position: fixed; right: 10px; bottom: 10px;
         width: 28px; height: 28px; padding: 0;
@@ -144,7 +144,7 @@
     mount.appendChild(style);
   }
 
-  // one in flight; gap keeps gtx from 429-ing on chat bursts
+  // one in flight; gap avoids hammering the free API during chat bursts
   let translationQueue = Promise.resolve();
   let lastTranslationAt = 0;
   let translateBackoffUntil = 0;

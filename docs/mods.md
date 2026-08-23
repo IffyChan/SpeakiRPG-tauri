@@ -21,17 +21,23 @@ Tauri main window (label: "main")
 URL: https://speakirpg.overture.io.kr/
 
 initialization_script, in order:
-  1. window.__SPEAKI_SETTINGS__
-  2. inject.js  -> window.SpeakiRPG API
-  3. your mods/*.js (enabled only)
+  1. settings bootstrap (`__SPEAKI_SETTINGS__`, `disabledMods`)
+  2. game-state-capture.js (if enabled in settings)
+  3. inject.js  -> window.SpeakiRPG API
+  4. bundled example mods (from the .exe via include_str!)
+  5. user mods from `<config dir>/mods/*.js` (everything except the two examples)
 ```
 
-Scripts run in the game page context, not in `settings.html`. Mods load once per full page load (`F5`) - toggle in Settings, then reload. A mod crash is caught per listener, so it won't take down translation.
+Scripts run in the game page context, not in `settings.html`. Mods load on every full page load (`F5`). Disable/enable in Settings applies after reload; the client keeps the latest `disabledMods` in `sessionStorage` so toggles survive `F5` without restarting the app. A mod crash is caught per listener, so it won't take down translation.
 
-Bundled examples (copied into `<config dir>/mods/` if missing):
+**Bundled with the release** (only these two ship inside the `.exe`; `src-tauri/mods/`):
 
 - `example-highlight.js` - yellow row when chat mentions your name
 - `example-emotes.js` - sample `clickEmoteSlot()` usage
+
+On first run the client also copies those files into `<config dir>/mods/` if missing (for editing). Loading uses the in-exe copy, not the folder duplicate.
+
+**User mods** (`skinchanger.js`, bots, etc.) live only in `<config dir>/mods/`. They are read at runtime and are not packed into the GitHub release binary.
 
 Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 

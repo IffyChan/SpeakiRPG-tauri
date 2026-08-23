@@ -8,18 +8,23 @@ use std::{
 
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-// same Discord application as the Electron build
+mod translate;
+
+use translate::Translator;
+
+// same Discord app as Electron; swap for your own (see README)
 const CLIENT_ID: &str = "861430403955949569";
 const GAME_URL: &str = "https://speakirpg.overture.io.kr/";
-const RELEASES_URL: &str = "https://github.com/DJTOMATO/SpeakiRPG/releases";
+const RELEASES_URL: &str = "https://github.com/IffyChan/SpeakiRPG-tauri/releases";
 
 // Electron MIN_UPDATE_INTERVAL_MS
 const MIN_UPDATE_INTERVAL_MS: u64 = 10_000;
 
-// ported verbatim from the Electron client
+// ported verbatim from Electron
 const ACTIVITIES: &[&str] = &[
     "Playing Speaki RPG",
     "Exploring the world chowa chowa",
@@ -40,6 +45,77 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+// settings.json in app config dir (e.g. %APPDATA%/com.ifchan.speakirpg on Windows)
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase", default)]
+struct Settings {
+    translate_target: String,
+    translate_enabled: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            translate_target: "ru".into(),
+            translate_enabled: true,
+        }
+    }
+}
+
+fn load_settings(app: &AppHandle) -> Settings {
+    let defaults = Settings::default();
+    let Some(config_dir) = app.path().app_config_dir().ok() else {
+        return defaults;
+    };
+
+    let path = config_dir.join("settings.json");
+    if let Ok(json) = std::fs::read_to_string(&path) {
+        match serde_json::from_str::<Settings>(&json) {
+            Ok(settings) => return settings,
+            Err(err) => eprintln!("settings.json parse error, using defaults: {err}"),
+        }
+    }
+
+    // write defaults on first run so the file can be edited by hand
+    if std::fs::create_dir_all(&config_dir).is_ok() {
+        if let Ok(json) = serde_json::to_string_pretty(&defaults) {
+            let _ = std::fs::write(&path, format!("{json}\n"));
+        }
+    }
+    defaults
+}
+
+fn load_mod_scripts(app: &AppHandle) -> String {
+    let mut scripts = String::new();
+    let Ok(config_dir) = app.path().app_config_dir() else {
+        return scripts;
+    };
+
+    let mods_dir = config_dir.join("mods");
+    let Ok(entries) = std::fs::read_dir(&mods_dir) else {
+        return scripts; // mods dir often missing
+    };
+
+    let mut paths: Vec<_> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
+        .collect();
+    paths.sort(); // stable load order
+
+    for path in paths {
+        match std::fs::read_to_string(&path) {
+            Ok(code) => {
+                println!("Loaded mod: {}", path.display());
+                scripts.push_str("\n;\n");
+                scripts.push_str(&code);
+            }
+            Err(err) => eprintln!("Failed to read mod {}: {err}", path.display()),
+        }
+    }
+    scripts
+}
+
 struct DiscordRpc {
     client: Option<DiscordIpcClient>,
 }
@@ -57,7 +133,7 @@ impl DiscordRpc {
         match self.client.as_mut().map(DiscordIpc::connect) {
             Some(Ok(())) => true,
             _ => {
-                // stale socket after a failed connect; next attempt needs a fresh client
+                // stale socket after failed connect
                 self.client = None;
                 false
             }
@@ -188,10 +264,18 @@ fn update_stats(state: tauri::State<AppState>, stats: PageStats, manual: bool) {
     }
 }
 
-#[derive(Clone, Copy)]
+#[tauri::command]
+async fn translate_text(
+    translator: tauri::State<'_, Translator>,
+    text: String,
+) -> Result<String, String> {
+    translator.translate(&text).await
+}
+
 enum ShortcutAction {
     Reload,
     RefreshStats,
+    ToggleTranslation,
 }
 
 #[cfg(target_os = "macos")]
@@ -210,6 +294,10 @@ fn shortcut_set() -> Vec<(Shortcut, ShortcutAction)> {
             Shortcut::new(Some(CMD_OR_CTRL | Modifiers::SHIFT), Code::KeyD),
             ShortcutAction::RefreshStats,
         ),
+        (
+            Shortcut::new(Some(CMD_OR_CTRL | Modifiers::SHIFT), Code::KeyT),
+            ShortcutAction::ToggleTranslation,
+        ),
     ]
 }
 
@@ -219,9 +307,12 @@ fn handle_shortcut(app: &AppHandle, action: ShortcutAction) {
             ShortcutAction::Reload => {
                 let _ = window.eval("window.location.reload()");
             }
-            // DOM read is in inject.js; Rust just emits refresh-stats
+            // DOM read in inject.js; Rust emits refresh-stats
             ShortcutAction::RefreshStats => {
                 let _ = window.emit("refresh-stats", ());
+            }
+            ShortcutAction::ToggleTranslation => {
+                let _ = window.emit("toggle-translation", ());
             }
         }
     }
@@ -230,16 +321,26 @@ fn handle_shortcut(app: &AppHandle, action: ShortcutAction) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_stats])
+        .invoke_handler(tauri::generate_handler![update_stats, translate_text])
         .setup(|app| {
+            let app_handle = app.handle().clone();
+
+            let settings = load_settings(&app_handle);
+            let translator = Translator::new(settings.translate_target.clone());
+            app.manage(translator);
+
             app.manage(AppState {
                 rpc: Mutex::new(DiscordRpc::new()),
                 last_update_ms: Mutex::new(0),
                 session_start_ms: now_millis(),
             });
 
-            // initialization_script only on WebviewWindowBuilder; runs each navigation including remote game
-            // eval can't return DOM, so inject.js pushes update_stats
+            // WebviewWindowBuilder only: initialization_script + init order matters
+            // __SPEAKI_SETTINGS__ -> inject.js -> config/mods/*.js
+            let settings_json = serde_json::to_string(&settings)
+                .unwrap_or_else(|_| "{translateTarget:\"ru\",translateEnabled:true}".into());
+            let mods = load_mod_scripts(&app_handle);
+
             let window = WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -248,10 +349,14 @@ fn main() {
             .title("SpeakiRPG")
             .inner_size(1920.0, 1080.0)
             .center()
+            .initialization_script(format!(
+                "window.__SPEAKI_SETTINGS__ = {settings_json};"
+            ))
             .initialization_script(include_str!("inject.js"))
+            .initialization_script(mods)
             .build()?;
 
-            // mirrors Electron register on focus / unregisterAll on blur
+            // shortcuts only while focused (Electron focus/blur register pattern)
             let app_handle = app.handle().clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Focused(true) => {

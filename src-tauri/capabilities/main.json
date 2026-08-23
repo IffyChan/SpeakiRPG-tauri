@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window: local splash + remote game page (DOM stats -> Discord Rich Presence)",
+  "description": "Main window: splash, remote game page, stats and chat translate commands",
   "windows": ["main"],
   "remote": {
     "urls": ["https://speakirpg.overture.io.kr/*"]
   },
-  "permissions": ["core:default", "allow-update-stats"]
+  "permissions": ["core:default", "allow-update-stats", "allow-translate-text"]
 }

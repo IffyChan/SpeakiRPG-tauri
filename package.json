@@ -3,6 +3,7 @@
   "private": true,
   "version": "1.0.4",
   "description": "Speaki RPG Desktop Client (Tauri 2) with Discord Rich Presence integration",
+  "author": "IffyChan",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

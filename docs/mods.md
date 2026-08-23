@@ -1,45 +1,37 @@
 # Mods and game interaction
 
-SpeakiRPG is a **desktop shell around the live game website** (`https://speakirpg.overture.io.kr/`). The game is a browser SPA (Three.js canvas + HTML UI overlays). There is **no official modding API** from the game developers.
+SpeakiRPG is a desktop shell around the live game site (`https://speakirpg.overture.io.kr/`) - a browser SPA (Three.js canvas + HTML overlays). The devs don't expose a modding API, so translation, Discord stats and mods are all really just a userscript: read and patch the DOM after the game draws it.
 
-Everything in this client — translation, Discord stats, mods — works the same way a userscript would: **read and tweak the page DOM** after the game renders it.
+## Figuring out the UI
 
-## How we figure out what is on the page
+No schema, so we work it out:
 
-Nobody hands us a schema. We reverse-engineer the UI:
+1. DevTools in the game window (`F12` -> Elements). Game classes use the `sr-` prefix.
+2. `MutationObserver` in `inject.js` on chat, player card, target bar, NPC dialog.
+3. The Electron port for stats selectors: [DJTOMATO/SpeakiRPG](https://github.com/DJTOMATO/SpeakiRPG).
+4. Offline dumps (maintainers only, `docs/secret/`, gitignored) for grepping minified JS.
+5. Updates break things - prefer `SpeakiRPG.on` / `get*` over hardcoded selectors.
 
-1. **DevTools in the client** — focus the game window, press `F12`, use Elements. Classes use the `sr-` prefix (BEM-style).
-2. **Watch the DOM change** — `inject.js` uses `MutationObserver` on chat, player card, target bar, NPC dialog.
-3. **Port from the Electron client** — stats selectors came from [DJTOMATO/SpeakiRPG](https://github.com/DJTOMATO/SpeakiRPG).
-4. **HTML snapshots for maintainers** — private DOM dumps help when DevTools is awkward; class names are what matter.
-5. **Trial and breakage** — game updates can rename classes. Prefer `SpeakiRPG.on(...)` and `SpeakiRPG.get*()` over copy-pasting selectors.
-
-If you confirm a stable selector, open a PR to add it to `SpeakiRPG.selectors` or a new event in `inject.js`.
+Found a stable selector? PR it into `SpeakiRPG.selectors` or add an event in `inject.js`.
 
 ## What runs where
 
 ```
-┌─────────────────────────────────────────────┐
-│  Tauri main window (label: "main")          │
-│  URL: https://speakirpg.overture.io.kr/     │
-│                                             │
-│  initialization_script (in order):          │
-│    1. window.__SPEAKI_SETTINGS__            │
-│    2. inject.js  → window.SpeakiRPG API     │
-│    3. your mods/*.js (enabled only)         │
-└─────────────────────────────────────────────┘
+Tauri main window (label: "main")
+URL: https://speakirpg.overture.io.kr/
+
+initialization_script, in order:
+  1. window.__SPEAKI_SETTINGS__
+  2. inject.js  -> window.SpeakiRPG API
+  3. your mods/*.js (enabled only)
 ```
 
-- Scripts run in the **game page context**, not in `settings.html`.
-- Mods load **once per full page load** (`F5`). Toggle mods in Settings, then reload.
-- A mod crash is caught per listener; it must not take down translation.
+Scripts run in the game page context, not in `settings.html`. Mods load once per full page load (`F5`) - toggle in Settings, then reload. A mod crash is caught per listener, so it won't take down translation.
 
 Bundled examples (copied into `<config dir>/mods/` if missing):
 
-| File | What it does |
-|------|----------------|
-| `example-highlight.js` | Yellow row when chat mentions your name |
-| `example-boss-target.js` | Red outline on target bar while a BOSS is selected |
+- `example-highlight.js` - yellow row when chat mentions your name
+- `example-emotes.js` - sample `clickEmoteSlot()` usage
 
 Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 
@@ -47,45 +39,40 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 
 ## `window.SpeakiRPG` API
 
-### Properties
+**Properties**
 
-| Member | Description |
-|--------|-------------|
-| `version` | Client version string |
-| `settings` | Read-only client settings (`translateTarget`, `translateEnabled`, …) |
-| `selectors` | Frozen map of **confirmed** CSS selectors (see below) |
+- `version` - client version string
+- `settings` - read-only client settings (`translateTarget`, `translateEnabled`, ...)
+- `selectors` - frozen map of confirmed CSS selectors (below)
 
-### Methods (snapshot reads)
+**Methods** (snapshot reads, call anytime after the HUD exists - return `null` if the root node isn't in the DOM yet)
 
-Call anytime after the HUD exists. Return `null` if the root node is not in the DOM yet.
+- `getStats()` - `{ playerName, level, exp, location }` (same as Discord)
+- `getPlayer()` - stats plus `{ expPercent, needsRevive }`
+- `getTarget()` - `{ name, hasTarget, isBoss, isBurning, hpText, hpPercent }`
+- `getDialog()` - `{ open, npcName, text }`
+- `clickEmoteSlot()` - clicks `.sr-emote-slot` on the hotbar, returns `false` if the slot's missing
+- `query(selector)` / `queryAll(selector)` - `querySelector` / `querySelectorAll` (array)
+- `translate(text)` - `Promise<string>`, built-in backend
+- `on(event, cb)` - subscribe, returns `unsubscribe()`
 
-| Method | Returns |
-|--------|---------|
-| `getStats()` | `{ playerName, level, exp, location }` — same fields as Discord |
-| `getPlayer()` | Stats plus `{ expPercent, needsRevive }` |
-| `getTarget()` | `{ name, hasTarget, isBoss, isBurning, hpText, hpPercent }` |
-| `getDialog()` | `{ open, npcName, text }` |
-| `query(selector)` | `document.querySelector` |
-| `queryAll(selector)` | `document.querySelectorAll` as array |
-| `translate(text)` | `Promise<string>` — built-in translation backend |
-| `on(event, cb)` | Subscribe; returns `unsubscribe()` |
-
-### Events
+**Events**
 
 | Event | When | Callback args |
 |-------|------|----------------|
-| `chat` | New chat row | `(message, rowElement)` |
-| `player` | Player card / location changes | `(player, cardElement)` |
-| `target` | Target bar changes | `(target, frameElement)` |
+| `chat` | new chat row | `(message, rowElement)` |
+| `player` | player card / location changes | `(player, cardElement)` |
+| `target` | target bar changes | `(target, frameElement)` |
 | `dialog` | NPC dialog open/close or text change | `(dialog, dialogElement)` |
+| `emote` | chat line matches emote heuristic | `(message, rowElement)` |
 | `stats` | Discord stats tick (~30s, 5min, `Ctrl+Shift+D`) | `(stats)` |
-| `settings` | Client settings changed | `(settings)` |
+| `settings` | client settings changed | `(settings)` |
 
-`player` / `target` / `dialog` use live DOM observers. `stats` is throttled for Discord only — use `player` for up-to-date name/level.
+`player` / `target` / `dialog` use live observers. `stats` follows the Discord poll schedule - use `player` if you want a fresh name/level.
 
 ### `SpeakiRPG.selectors`
 
-Confirmed in client snapshots (Aug 2026). Prefer these over hard-coded strings:
+Confirmed against DOM dumps (Aug 2026). Use these instead of copying strings around:
 
 | Key | Selector |
 |-----|----------|
@@ -100,6 +87,7 @@ Confirmed in client snapshots (Aug 2026). Prefer these over hard-coded strings:
 | `playerLevel` | `.sr-player-card__portrait-wrap .sr-player-card__lv-badge` |
 | `playerExp` | `.sr-player-card__exp-track` |
 | `playerRevive` | `.sr-player-card__revive-pill` |
+| `playerHp` | `.sr-hp-gauge__value` |
 | `minimapCaption` | `.sr-minimap-frame__caption` |
 | `targetFrame` | `.sr-target-frame` |
 | `targetName` | `.sr-target-frame__name` |
@@ -112,10 +100,28 @@ Confirmed in client snapshots (Aug 2026). Prefer these over hard-coded strings:
 | `npcText` | `.sr-npc-dialog__text` |
 | `skillBar` | `.sr-skill-hotbar` |
 | `skillSlot` | `.sr-skill-slot` |
+| `emoteSlot` | `.sr-emote-slot` (hotbar, `title="Emote"`, smiley icon) |
+| `potionPopover` | `.sr-potion-popover` (empty in our dumps - potion UI, not emotes) |
 | `castBar` | `.sr-cast-bar` |
 | `gameCanvas` | `.sr-game-canvas` |
 
-Row nodes also expose `data-player-id` and `data-player-name` (see `chat` event).
+Hotbar also has `.sr-jump-slot` and `.sr-camera-reset-slot`, not in `selectors` yet - use `query`.
+
+Row nodes carry `data-player-id`, `data-player-name` (see `chat`).
+
+---
+
+## Emotes
+
+**T** (Settings -> Keybinds -> Emote in-game) plays an animation. There's no emote wheel in the HTML.
+
+The hotbar smiley (`.sr-emote-slot`) does the same thing as that keybind when clicked. `clickEmoteSlot()` triggers that click - it doesn't synthesize a keypress, so rebinding **T** in-game still matters.
+
+`.sr-potion-popover` is for potions, empty in our dumps.
+
+`on('emote')` only looks at chat (emoji-only lines etc.) - it doesn't fire for character animations in the world.
+
+More detail (bundle grep, wire ids) in `docs/secret/dom-audit-body2.md` (gitignored).
 
 ---
 
@@ -127,17 +133,16 @@ Row nodes also expose `data-player-id` and `data-player-name` (see `chat` event)
 SpeakiRPG.on('chat', (message, row) => { /* ... */ });
 ```
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `message.text` | string | Line body |
-| `message.sender` | string \| null | `data-player-name` |
-| `message.playerId` | string \| null | `data-player-id` |
-| `message.senderLabel` | string \| null | e.g. `[PlayerName]` |
-| `message.isMine` | boolean | Your message |
-| `message.isSystem` | boolean | System line |
-| `row` | HTMLElement | `.sr-chatbox__row` — safe to style |
+- `message.text` (string) - line body
+- `message.sender` (string|null) - `data-player-name`
+- `message.playerId` (string|null) - `data-player-id`
+- `message.senderLabel` (string|null) - e.g. `[PlayerName]`
+- `message.isMine` (bool)
+- `message.isSystem` (bool)
+- `message.isEmote` (bool) - heuristic: emoji-only or system emote keywords
+- `row` (HTMLElement) - `.sr-chatbox__row`, safe to style
 
-Fires once per row (first time the client sees it).
+Fires once per row, first time the client sees it.
 
 ### `player`
 
@@ -145,14 +150,11 @@ Fires once per row (first time the client sees it).
 SpeakiRPG.on('player', (player, card) => { /* ... */ });
 ```
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `playerName` | string \| null | Character name |
-| `level` | string \| null | Level badge text |
-| `exp` | string \| null | XP `title` or visible text |
-| `location` | string \| null | Minimap caption |
-| `expPercent` | number \| null | Width of `.sr-player-card__exp-fill` |
-| `needsRevive` | boolean | Revive pill visible |
+- `playerName`, `level`, `exp`, `location` (string|null)
+- `expPercent` (number|null) - width of `.sr-player-card__exp-fill`
+- `hpText` (string|null) - e.g. `85 / 140`
+- `hpCurrent` / `hpMax` (number|null) - parsed from `hpText`
+- `needsRevive` (bool) - `hpCurrent === 0` (the revive pill alone isn't reliable)
 
 ### `target`
 
@@ -160,14 +162,12 @@ SpeakiRPG.on('player', (player, card) => { /* ... */ });
 SpeakiRPG.on('target', (target, frame) => { /* ... */ });
 ```
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `hasTarget` | boolean | Name non-empty |
-| `name` | string \| null | Target name |
-| `isBoss` | boolean | BOSS badge present |
-| `isBurning` | boolean | BURN badge present |
-| `hpText` | string \| null | HP label text |
-| `hpPercent` | number \| null | HP fill bar width % |
+- `hasTarget` (bool) - name non-empty
+- `name` (string|null)
+- `isBoss` (bool) - BOSS badge visible (`display: none` when it's not a boss)
+- `isBurning` (bool) - BURN badge visible
+- `hpText` (string|null)
+- `hpPercent` (number|null) - HP fill bar width %
 
 ### `dialog`
 
@@ -175,23 +175,18 @@ SpeakiRPG.on('target', (target, frame) => { /* ... */ });
 SpeakiRPG.on('dialog', (dialog, el) => { /* ... */ });
 ```
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `open` | boolean | Dialog visible |
-| `npcName` | string \| null | Name tag |
-| `text` | string \| null | Dialog body |
+`open` (bool), `npcName` (string|null), `text` (string|null).
 
 ### `stats` / `settings`
 
-`stats` — `{ playerName, level, exp, location }` on Discord schedule.
-
-`settings` — same shape as `SpeakiRPG.settings` when translation or provider changes.
+`stats`: `{ playerName, level, exp, location }` on the Discord tick.
+`settings`: same shape as `SpeakiRPG.settings`, fires on change.
 
 ---
 
 ## Examples
 
-### Chat logger
+**Chat logger**
 
 ```js
 // SpeakiRPG mod: chat logger
@@ -202,20 +197,17 @@ SpeakiRPG.on('chat', (message) => {
 });
 ```
 
-### Mention highlight (bundled)
-
-Uses `getPlayer()` + `on('player')` for your name, styles the row on mention.
-
-### Boss target outline (bundled)
+**`emote` (chat only)** - world emotes (**T**, hotbar) are separate, see above. This fires when a chat row matches the heuristic in `inject.js`.
 
 ```js
-SpeakiRPG.on('target', (target, frame) => {
-  frame.style.boxShadow =
-    target.hasTarget && target.isBoss ? '0 0 0 2px rgba(220, 80, 80, 0.55)' : '';
+SpeakiRPG.on('emote', (emote, row) => {
+  row.style.background = 'rgba(180, 140, 255, 0.12)';
 });
 ```
 
-### Translate NPC dialog line
+**Mention highlight** (bundled) - uses `getPlayer()` + `on('player')` for your name, styles the row on mention. Bundled files only copy to `<config dir>/mods/` if missing - after an update, delete stale copies there and reload.
+
+**Translate NPC dialog line**
 
 ```js
 SpeakiRPG.on('dialog', async (dialog) => {
@@ -225,21 +217,19 @@ SpeakiRPG.on('dialog', async (dialog) => {
 });
 ```
 
-### Revive reminder
+**Revive reminder**
 
 ```js
 // SpeakiRPG mod: revive ping
 
 let wasDead = false;
 SpeakiRPG.on('player', (player) => {
-  if (player.needsRevive && !wasDead) console.log('You are dead — press R');
+  if (player.needsRevive && !wasDead) console.log('You are dead - press R');
   wasDead = player.needsRevive;
 });
 ```
 
-### Custom DOM (advanced)
-
-When no event exists yet, use `selectors` + `query` / `queryAll`:
+**Custom DOM (advanced)** - when there's no event yet, use `selectors` + `query`/`queryAll`:
 
 ```js
 const slots = SpeakiRPG.queryAll(SpeakiRPG.selectors.skillSlot);
@@ -249,7 +239,7 @@ for (const slot of slots) {
 }
 ```
 
-Skill/cast observers are not built in — poll sparingly or open a PR to add `on('skill', …)`.
+No built-in skill/cast observers - poll if you need it, or PR an `on('skill')`.
 
 ---
 
@@ -258,34 +248,44 @@ Skill/cast observers are not built in — poll sparingly or open a PR to add `on
 1. Create `my-mod.js` in the mods folder (or copy an example).
 2. First line: `// SpeakiRPG mod: human-readable name` (shown in Settings).
 3. Prefer `on` / `get*` / `selectors` over raw `document.querySelector`.
-4. Enable in Settings → Mods, reload with `F5`.
-5. Watch the console for `[SpeakiRPG] mod listener failed:`.
+4. Enable in Settings -> Mods, reload with `F5`.
+5. Check console for `[SpeakiRPG] mod listener failed:` if something's off.
 
-## Limits
+## What you can and can't do
 
-| Goal | Status |
-|------|--------|
-| Chat, HUD, target, NPC dialog | Yes — API above |
-| Style DOM | Yes |
-| Translation / client settings | Yes |
-| Game network / packets | No |
-| 3D world / entity positions | No (Three.js canvas) |
-| Survive game update | No guarantee |
+Works: chat/HUD/target/NPC dialog, styling the DOM, translation and client settings, clicking the emote slot.
+Doesn't work: emote picker in the DOM, game network access, 3D positions (it's a canvas). Assume any of this can break on a game update.
 
 ## Debugging
 
-1. `F12` → Console in the game window.
+1. `F12` -> Console in the game window.
 2. `SpeakiRPG.getPlayer()` / `getTarget()` after login.
-3. `SpeakiRPG.on('chat', console.log)` — send a chat message.
+3. `SpeakiRPG.on('chat', console.log)`, then send a chat message.
 4. Compare Elements panel to `SpeakiRPG.selectors`.
-5. Mod missing from Settings? File must be `.js` in the mods folder.
+5. Mod not showing in Settings? File has to be `.js` in the mods folder.
+
+**Pitfalls**
+
+| Symptom | Cause |
+|---------|-------|
+| `clickEmoteSlot()` returns false | no `.sr-emote-slot` yet (mobile layout etc.) |
+| `on('emote')` silent | chat line doesn't match the heuristic |
+| Old bundled mod sticking around | already in `%APPDATA%/.../mods/`, client won't overwrite |
+| `needsRevive` stuck true | revive pill stays in HTML while alive - API uses `hpCurrent === 0` instead |
+| RU chat shows target `en` | turn on translation, Cyrillic passes through as-is when target is `ru`/`uk` |
+| RU text + `(hello)` | that's a translated line, brackets hold the original |
+
+**Hotkeys**
+
+- **T** (game) - emote animation
+- `Ctrl+Shift+T` - toggle translation
+- `Ctrl+Shift+S` - open settings
 
 ## For contributors
 
-| File | Role |
-|------|------|
-| `src-tauri/src/inject.js` | API, observers, translation |
-| `src-tauri/src/main.rs` | Mod load, `disabledMods` |
-| `src-tauri/mods/example-*.js` | Bundled samples |
+- `src-tauri/src/inject.js` - API, observers, translation
+- `src-tauri/src/main.rs` - mods, settings window
+- `src-tauri/mods/example-*.js` - bundled samples
+- `docs/secret/` - gitignored dumps + `dom-audit-body2.md`
 
-New confirmed UI: add selector → `read*` + `get*` + `on` if it changes over time → document here.
+New UI element? Add the selector in `inject.js`, a `get*`/`on` if it changes, and a row in this file. Bundle/HTML notes go in `docs/secret/`.

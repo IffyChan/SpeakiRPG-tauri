@@ -1,142 +1,117 @@
 # Local chat translation with Ollama (SLM)
 
-Use SpeakiRPG with a **local small language model** instead of cloud translation APIs — no quotas, no HTTP 429, nothing leaves your machine except what Ollama already does locally.
+Run translation locally instead of hitting cloud APIs - no quotas, no 429s, nothing leaves your machine.
 
-You will use the **Custom** provider (Settings → Translation API).
+Use the **Custom** provider (Settings -> Translation API).
 
-[Russian version](ollama-translation.md) — tuned for players translating into Russian.
+[Russian version](ollama-translation.md), tuned for translating into Russian.
 
 ## Who this is for
 
-Speaki RPG chat is mostly **Japanese and Korean**, with some English and emoji-only lines. If you play in English, you typically want:
+Speaki RPG chat is mostly Japanese and Korean, with some English and emoji-only lines. If you play in English you probably want:
 
-- **Sources:** Japanese, Korean, occasional English from other players  
-- **Target:** whatever you set under **Translate into** (`en` is the usual pick)
+- Sources: Japanese, Korean, occasional English
+- Target: whatever you set under "Translate into" (`en` for most people)
 
-This guide assumes **`en`** in examples. Change `translateTarget` and the prompt if you want German, Spanish, etc.
+Examples below use `en`. Swap `translateTarget` and the prompt if you want German, Spanish, etc.
 
 ## Requirements
 
-- [Ollama](https://ollama.com/) on Windows, macOS, or Linux  
-- ~4–8 GB free RAM for a 3–4B model (varies by model and quant)  
-- SpeakiRPG with **Translate chat messages** enabled  
+- [Ollama](https://ollama.com/), any OS
+- 4-8 GB free RAM for a 3-4B model
+- "Translate chat messages" enabled in SpeakiRPG
 
 ## 1. Install Ollama
 
-1. Install from [ollama.com/download](https://ollama.com/download).  
-2. Leave the app running — default API: `http://127.0.0.1:11434`.  
-3. Smoke test:
+Install from [ollama.com/download](https://ollama.com/download), leave it running (default API on `http://127.0.0.1:11434`), then check it's alive:
 
 ```bash
 ollama --version
 curl http://127.0.0.1:11434/api/tags
 ```
 
-JSON back (even an empty model list) means the server is up.
+Any JSON back, even an empty model list, means the server's up.
 
 ## 2. Pick a model
 
-Chat translation needs a **small, fast** model. You are not running a 70B assistant — you are firing a request every few seconds when the lobby is active.
+You need something small and fast - you're firing a request every few seconds while chat is active, not running a 70B assistant.
 
-What matters for this game:
-
-| Need | Why |
-|------|-----|
-| Strong **multilingual** input | JA/KO chat, halfwidth katakana, mixed emoji + text |
-| Follows **“translation only”** | No “Sure! Here’s the translation:” |
-| Fits in **consumer RAM** | 3–4B class |
-
-### Recommended — `qwen3.5:4b`
+### `qwen3.5:4b` - recommended
 
 ```bash
 ollama pull qwen3.5:4b
 ```
 
-Good default over older `qwen2.5:3b`: ~3.4 GB disk, newer, handles Asian source text well, and usually respects a strict system prompt. Works for essentially any target language SpeakiRPG supports.
+~3.4 GB on disk, handles JA/KO input well, and actually respects "translation only" prompts. Good default for most target languages.
 
-### Low RAM (≤4 GB system RAM)
+### `qwen3:0.6b` - if you're on 4 GB RAM or less
 
 ```bash
 ollama pull qwen3:0.6b
 ```
 
-Runs on weak hardware. Expect **meaning** mistakes on slang, game-specific phrases, and idioms — not just awkward English. Fine for “something is better than nothing”, not for quality.
+Runs on weak machines but gets slang, idioms and game-specific phrases wrong pretty often. Use it if you have no other choice, not because it's a good pick.
 
-### Models that look popular but fit this job poorly
+### Models to skip
 
-- **`llama3.2:3b`** — fine if you only ever translate **into English** (it is in Meta’s supported set). Still weaker on **Japanese/Korean input** than Qwen at the same size. Skip if most of your chat is JA/KO.  
-- **`gemma2:2b`** — old and small; translation quality is underwhelming. Newer Gemma edge models target vision/tools more than plain MT.  
-- **7B+ models** — overkill for chat lines; slow under queue + Ollama latency.
+- `llama3.2:3b` - fine for English-only output, but noticeably worse than Qwen on Japanese/Korean input.
+- `gemma2:2b` - old, weak at translation. Newer Gemma edge models are more about vision/tools than plain MT.
+- Anything 7B+ - too slow for realtime chat once you add queue + inference time.
 
-Quick test (swap target language if you are not using English):
+Quick sanity check:
 
 ```bash
 ollama run qwen3.5:4b "Translate to English: いい畑ですね"
 ```
 
-Expect a short line like “Nice field” / “That’s a nice field”. If you get a paragraph of explanation — or a long pause with no translation — fix the API setup below.
+Should get something short like "Nice field." A wall of explanation, or a long pause with nothing, means the setup below needs fixing.
 
-### Qwen3: turn off thinking (required)
+### Turn off thinking mode (Qwen3/3.5)
 
-**Qwen3 / Qwen3.5** on Ollama defaults to **thinking mode**: the model reasons in `message.thinking` before (or instead of) filling `message.content`. For chat translation that means huge latency and often an **empty** translated line.
+Qwen3 defaults to "thinking" - it reasons in `message.thinking` before touching `message.content`. For chat translation this just means long waits and an empty translation.
 
-Benchmark on `qwen3.5:4b`, phrase `いい畑ですね`:
+Tested on `qwen3.5:4b`, phrase "いい畑ですね":
 
-| Setting | Time | `message.content` |
-|---------|------|-------------------|
-| default (thinking on) | ~71 s | empty (budget spent on thinking) |
-| `"think": false` | ~0.6 s | `Отличное поле!` |
+- default (thinking on): ~71s, `message.content` empty
+- `"think": false`: ~0.6s, `message.content` = "Отличное поле!"
 
-Add **`"think": false` at the top level of the POST JSON** (next to `"model"`). Putting `think` inside `options` is **ignored**.
-
-Quick terminal test:
+Add `"think": false` at the **top level** of the POST body, next to `"model"`. Inside `options` it's silently ignored.
 
 ```bash
 curl http://127.0.0.1:11434/api/chat -d "{\"model\":\"qwen3.5:4b\",\"think\":false,\"messages\":[{\"role\":\"user\",\"content\":\"Translate to English: いい畑ですね\"}],\"stream\":false}"
 ```
 
-You want a short `message.content`, not pages of `thinking`.
+You want a short `message.content`, not pages of thinking.
 
 ## 3. Configure SpeakiRPG
 
-### Settings UI
+1. `Ctrl+Shift+S`, or the gear icon bottom-right.
+2. Translation API -> Custom URL / local LLM.
+3. Fill in for `qwen3.5:4b`, target English:
 
-1. `Ctrl+Shift+S` (or gear icon, bottom-right).  
-2. **Translation API** → **Custom URL / local LLM**.  
-3. Example for `qwen3.5:4b` and target **English**:
+- Endpoint URL: `http://127.0.0.1:11434/api/chat`
+- JSON path: `message.content`
+- POST JSON body: see below
+- API key: leave empty
 
-| Field | Value |
-|-------|--------|
-| **Endpoint URL** | `http://127.0.0.1:11434/api/chat` |
-| **JSON path** | `message.content` |
-| **POST JSON body** | see below |
-| **API key** | empty |
+Use `/api/chat`, not `/api/generate` - instruct models expect system/user roles, and `/api/generate` with a raw prompt string gets you more preamble and fewer clean translations.
 
-**Use `/api/chat`, not `/api/generate`:** current instruct models expect `system` / `user` roles. `/api/generate` with a raw string ignores that structure; you get more preamble and fewer “translation only” replies.
-
-**POST JSON body** (one line; `{target}` comes from your **Translate into** setting):
+POST body, one line (`{target}` comes from your "Translate into" setting):
 
 ```json
 {"model":"qwen3.5:4b","think":false,"messages":[{"role":"system","content":"You are a translation engine. Output ONLY the translated text. No quotes, no explanations, no markdown."},{"role":"user","content":"Translate the following to language code {target}. Preserve tone and brevity of chat.\n\n{text}"}],"stream":false,"options":{"temperature":0.2}}
 ```
 
-Use `"think":false` and `"temperature":0.2`. Without `think:false`, Qwen3.5 can sit in reasoning for a minute+. Default temperature (~0.8) is too chatty for inline translation.
+`think:false` and a low temperature both matter - without them Qwen3.5 can sit reasoning for over a minute, and default temperature (~0.8) makes it too chatty.
 
-4. **Chat translation** → **Translate into** → English (`en`).  
-5. Changes save automatically.
+4. Chat translation -> Translate into -> English (`en`).
+5. Settings save automatically.
 
-Placeholders injected by the client:
-
-| Placeholder | Value |
-|-------------|--------|
-| `{text}` | Chat line |
-| `{target}` | `translateTarget` (`en`, `de`, `ja`, …) |
-| `{source}` | `auto` (literal string in template) |
-| `{api_key}` | from settings if you set one |
+Placeholders the client fills in: `{text}` (chat line), `{target}` (`translateTarget`), `{source}` (always `auto`), `{api_key}` (from settings if set).
 
 ### settings.json
 
-Path: [README → Configuration](../README.md#configuration).
+Path: see [README](../README.md#configuration).
 
 ```json
 {
@@ -150,97 +125,76 @@ Path: [README → Configuration](../README.md#configuration).
 }
 ```
 
-Turn on **Translate chat messages** in Settings (or set `"translateEnabled": true`) after editing.
+Escape inner quotes as `\"`, newlines as `\\n`. Then turn on "Translate chat messages" (or set `translateEnabled: true`).
 
-Escape inner quotes as `\"`, newlines as `\\n`.
+## 4. Fallback: /api/generate
 
-## 4. Fallback: `/api/generate`
+Only if `/api/chat` isn't available:
 
-Only if `/api/chat` is unavailable:
-
-| Field | Value |
-|-------|--------|
-| **Endpoint URL** | `http://127.0.0.1:11434/api/generate` |
-| **JSON path** | `response` |
+- Endpoint: `http://127.0.0.1:11434/api/generate`
+- JSON path: `response`
 
 ```json
 {"model":"qwen3.5:4b","think":false,"prompt":"Output ONLY the translated text. No preamble.\n\nTranslate to {target}: {text}","stream":false,"options":{"temperature":0.2}}
 ```
 
-`stream` must be `false`.
+`stream` has to be `false`.
 
-## 5. Verify
+## 5. Verify it works
 
-### Ollama directly
+Direct against Ollama:
 
 ```bash
 curl http://127.0.0.1:11434/api/chat -d "{\"model\":\"qwen3.5:4b\",\"think\":false,\"messages\":[{\"role\":\"system\",\"content\":\"Output ONLY the translated text.\"},{\"role\":\"user\",\"content\":\"Translate to English: いい畑ですね\"}],\"stream\":false}"
 ```
 
-Check `message.content` in the JSON response.
+Check `message.content` in the response.
 
-### SpeakiRPG console (F12 in-game)
+In-game console (F12):
 
 ```js
 await window.__TAURI__.core.invoke('translate_text', { text: 'いい畑ですね' })
 ```
 
-Should resolve to English (or your `translateTarget`) after Ollama returns.
+Should return English (or your target) once Ollama responds.
 
-### Live chat
+Test lines in live chat: `いい畑ですね` (Japanese), `ｱﾂｲ` (halfwidth katakana), `안녕하세요` (Korean), `gg wp` (Latin, only translated if target isn't `en`).
 
-| Message | What it exercises |
-|---------|-------------------|
-| `いい畑ですね` | Japanese (common in lobby) |
-| `ｱﾂｲ` | Halfwidth katakana |
-| `안녕하세요` | Korean |
-| `gg wp` | Latin (others’ English; translated when target ≠ `en`) |
+"Translate my own messages" has to be on separately if you want your own lines translated. Only new rows get processed - scrollback isn't touched.
 
-**Translate my own messages** must be on to translate lines you send.
+## 6. What to expect
 
-The client only processes **new** rows after setup; scrollback is not rewritten.
+- First line after being idle is slow while the model loads.
+- Roughly 400ms between requests plus Ollama's inference time - usually 1-5s per line when chat is busy.
+- Lines over 500 characters get skipped.
+- Default quant (usually Q4_K_M) is fine. `:q8_0` helps nuance a bit if it's published for your model, at some speed cost.
+- A 4B model is a helper, not a real translator - it'll get slang, names and JA/KO memes wrong sometimes.
 
-## 6. Speed and quality expectations
+If you're getting "Here is the translation:" or nothing at all:
 
-- **Cold start:** first line after idle is slow while the model loads.  
-- **Queue:** ~400 ms minimum between API calls + Ollama inference → often **1–5 s per line** in busy chat.  
-- **Length cap:** lines over **500 characters** are skipped.  
-- **Quant:** default `ollama pull` quant (usually Q4_K_M) is enough. `:q8_0` can help nuance at a speed cost if published for your model.  
-- **SLM limits:** game slang, names, and KO/JA memes will be wrong sometimes. A 4B model is a helper, not a professional translator.
-
-If output includes “Here is the translation:” or nothing shows up after a long wait:
-
-1. Add `"think": false` at the **top level** of the POST JSON (not inside `options`).
-2. Use `/api/chat` with a system message (section 3).
-3. Lower `temperature` (0.1–0.3).
-4. Tighten system text: `Output ONLY the translated text.`
+1. Check `"think": false` is at the top level of the POST body, not inside `options`.
+2. Use `/api/chat` with a system message, not `/api/generate`.
+3. Lower temperature to 0.1-0.3.
+4. Tighten the system prompt: "Output ONLY the translated text."
 
 ## 7. Troubleshooting
 
-| Symptom | Likely fix |
-|---------|------------|
-| `custom translate request failed` | Ollama not running → `curl http://127.0.0.1:11434/api/tags` |
-| `model not found` | `ollama pull qwen3.5:4b`; model name in JSON must match `ollama list` |
-| `translateJsonPath ... not found` | `/api/chat` → `message.content`; `/api/generate` → `response` |
-| Gibberish / wrong language | `translateTarget` mismatch; test with curl first |
-| JA/KO → EN is nonsense | Model too small → `qwen3.5:4b`; avoid `qwen3:0.6b` for quality |
-| 10–60+ s wait, no translation | Qwen3 thinking on — add `"think": false` to POST body |
-| Slow but translation works | Free RAM; avoid 7B+ for realtime chat |
-| Console works, chat does not | Enable translation; send a **new** message; check `translateEnabled` |
+| Symptom | Cause |
+|---------|-------|
+| `custom translate request failed` | Ollama isn't running - check `curl http://127.0.0.1:11434/api/tags` |
+| `model not found` | `ollama pull qwen3.5:4b`; name in JSON must match `ollama list` |
+| `translateJsonPath ... not found` | `/api/chat` -> `message.content`, `/api/generate` -> `response` |
+| Gibberish / wrong language | `translateTarget` mismatch, test with curl |
+| JA/KO -> EN is nonsense | Model's too small, switch to `qwen3.5:4b`, skip `qwen3:0.6b` |
+| Waits 10-60s+, no translation | Qwen3 thinking is on, add `think: false` |
+| Works but slow | Free up RAM, avoid 7B+ models |
+| Console works, chat doesn't | Check `translateEnabled`, and send a *new* message |
 
-## 8. Not Ollama?
+## 8. Not using Ollama?
 
-Same **Custom** slot works for:
+The Custom slot also works with:
 
-- **[LibreTranslate](https://libretranslate.com/)** (local Docker) — traditional MT, lighter than an LLM  
-- **LM Studio** / **llama.cpp** OpenAI-compatible servers — point endpoint + JSON path at their response shape  
+- [LibreTranslate](https://libretranslate.com/) (local Docker) - traditional MT, lighter than an LLM
+- LM Studio / llama.cpp OpenAI-compatible servers - point the endpoint and JSON path at their response shape
 
-Pattern: URL + optional POST template + JSON path to the translated string.
-
-## Checklist
-
-1. `ollama pull qwen3.5:4b`  
-2. Settings → Custom → `/api/chat`, `"think":false`, body with `system` + `{target}` + `{text}`, `temperature: 0.2`  
-3. **Translate into** = your language (`en` for most English players)  
-4. `invoke('translate_text', …)` in console  
-5. New message in lobby chat  
+Same idea everywhere: URL + optional POST template + JSON path to the translated string.

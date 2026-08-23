@@ -10,6 +10,7 @@ fn main() {
                     "set_settings",
                     "open_mods_folder",
                     "open_settings",
+                    "list_mods",
                 ]),
             ),
     )

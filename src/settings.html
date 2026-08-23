@@ -116,6 +116,25 @@
             accent-color: #5b8cff;
         }
 
+        .mod-list {
+            margin: 0 0 12px;
+        }
+
+        .mod-row span {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .mod-name {
+            color: #d7dce4;
+        }
+
+        .mod-row code {
+            font-size: 11px;
+            color: #7a828e;
+        }
+
         .hint {
             margin: 10px 0 0;
             font-size: 12px;
@@ -230,8 +249,12 @@
     <section>
         <h2>Mods</h2>
         <p class="hint" style="margin: 0 0 10px;">
-            Drop <code>.js</code> files into the mods folder. They run on every page load,
-            in filename order. See README for the <code>SpeakiRPG</code> mod API.
+            Small scripts that hook chat, stats, and translation. Drop more <code>.js</code> files into the mods folder.
+            See README for the <code>SpeakiRPG</code> API.
+        </p>
+        <div id="modList" class="mod-list"></div>
+        <p class="hint" style="margin: 0 0 10px;">
+            Reload the game page (F5) after enabling or disabling a mod.
         </p>
         <button id="openMods">Open mods folder</button>
     </section>
@@ -260,6 +283,15 @@
 
         const $ = (id) => document.getElementById(id);
         let statusTimer = null;
+        let cachedSettings = null;
+
+        function escapeHtml(text) {
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
 
         function status(text, isError) {
             const el = $('status');
@@ -286,23 +318,32 @@
             if (panel) panel.classList.add('active');
         }
 
-        async function refresh() {
-            const settings = await window.__TAURI__.core.invoke('get_settings');
-            fillSelect(settings.translateTarget);
-            $('enabled').checked = settings.translateEnabled;
-            $('own').checked = settings.translateOwn;
-            $('provider').value = settings.translateProvider || 'mymemory';
-            $('apiKey').value = settings.translateApiKey || '';
-            $('endpoint').value = settings.translateEndpoint || '';
-            $('jsonPath').value = settings.translateJsonPath || '';
-            $('customApiKey').value = settings.translateApiKey || '';
-            $('postBody').value = settings.translatePostBody || '';
-            syncProviderUi($('provider').value);
+        async function refreshModList() {
+            const mods = await window.__TAURI__.core.invoke('list_mods');
+            const list = $('modList');
+            if (!mods.length) {
+                list.innerHTML = '<p class="hint" style="margin:0">No mods yet.</p>';
+                return;
+            }
+            list.innerHTML = mods
+                .map(
+                    (mod) => `
+                <label class="check mod-row">
+                    <input type="checkbox" data-mod-file="${escapeHtml(mod.filename)}" ${
+                        mod.enabled ? 'checked' : ''
+                    }>
+                    <span>
+                        <span class="mod-name">${escapeHtml(mod.label)}</span>
+                        <code>${escapeHtml(mod.filename)}</code>
+                    </span>
+                </label>`
+                )
+                .join('');
         }
 
-        async function save() {
+        function buildSettings(overrides = {}) {
             const provider = $('provider').value;
-            const settings = {
+            return {
                 translateTarget: $('target').value,
                 translateEnabled: $('enabled').checked,
                 translateOwn: $('own').checked,
@@ -316,13 +357,43 @@
                           ? $('customApiKey').value
                           : '',
                 translatePostBody: $('postBody').value,
+                disabledMods: cachedSettings?.disabledMods ?? [],
+                ...overrides,
             };
+        }
+
+        async function refresh() {
+            cachedSettings = await window.__TAURI__.core.invoke('get_settings');
+            fillSelect(cachedSettings.translateTarget);
+            $('enabled').checked = cachedSettings.translateEnabled;
+            $('own').checked = cachedSettings.translateOwn;
+            $('provider').value = cachedSettings.translateProvider || 'mymemory';
+            $('apiKey').value = cachedSettings.translateApiKey || '';
+            $('endpoint').value = cachedSettings.translateEndpoint || '';
+            $('jsonPath').value = cachedSettings.translateJsonPath || '';
+            $('customApiKey').value = cachedSettings.translateApiKey || '';
+            $('postBody').value = cachedSettings.translatePostBody || '';
+            syncProviderUi($('provider').value);
+            await refreshModList();
+        }
+
+        async function save(overrides = {}) {
+            const settings = buildSettings(overrides);
             try {
                 await window.__TAURI__.core.invoke('set_settings', { settings });
+                cachedSettings = settings;
                 status('saved');
             } catch (err) {
                 status(String(err), true);
             }
+        }
+
+        async function setModEnabled(filename, enabled) {
+            const disabled = new Set(cachedSettings?.disabledMods || []);
+            if (enabled) disabled.delete(filename);
+            else disabled.add(filename);
+            await save({ disabledMods: [...disabled] });
+            await refreshModList();
         }
 
         $('target').addEventListener('change', save);
@@ -341,9 +412,16 @@
         $('openMods').addEventListener('click', async () => {
             try {
                 await window.__TAURI__.core.invoke('open_mods_folder');
+                await refreshModList();
             } catch (err) {
                 status(String(err), true);
             }
+        });
+
+        $('modList').addEventListener('change', (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement) || !input.dataset.modFile) return;
+            setModEnabled(input.dataset.modFile, input.checked);
         });
 
         // keep in sync with hotkey toggles happening in the game window

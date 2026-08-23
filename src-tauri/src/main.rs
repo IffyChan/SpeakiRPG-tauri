@@ -59,6 +59,8 @@ pub struct Settings {
     pub translate_json_path: String,
     pub translate_api_key: String,
     pub translate_post_body: String,
+    #[serde(default)]
+    pub disabled_mods: Vec<String>,
 }
 
 impl Default for Settings {
@@ -72,6 +74,7 @@ impl Default for Settings {
             translate_json_path: String::new(),
             translate_api_key: String::new(),
             translate_post_body: String::new(),
+            disabled_mods: Vec::new(),
         }
     }
 }
@@ -177,6 +180,12 @@ fn set_settings(
         translate_json_path: settings.translate_json_path.trim().to_string(),
         translate_api_key: settings.translate_api_key.trim().to_string(),
         translate_post_body: settings.translate_post_body.trim().to_string(),
+        disabled_mods: settings
+            .disabled_mods
+            .into_iter()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect(),
         ..settings
     };
 
@@ -192,16 +201,126 @@ fn set_settings(
 
 #[tauri::command]
 fn open_mods_folder(app: AppHandle) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?
-        .join("mods");
-    // creates mods/ on first click if missing
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = mods_dir(&app).ok_or_else(|| "config directory unavailable".to_string())?;
+    ensure_bundled_mods(&dir);
     app.opener()
         .open_path(dir.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModInfo {
+    filename: String,
+    label: String,
+    enabled: bool,
+}
+
+fn mods_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("mods"))
+}
+
+fn ensure_bundled_mods(mods_dir: &std::path::Path) {
+    if std::fs::create_dir_all(mods_dir).is_err() {
+        return;
+    }
+    let example = mods_dir.join("example-highlight.js");
+    if example.exists() {
+        return;
+    }
+    let _ = std::fs::write(example, include_str!("../mods/example-highlight.js"));
+}
+
+fn mod_display_name(filename: &str, source: &str) -> String {
+    for line in source.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("// SpeakiRPG mod:") {
+            let name = rest.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    filename
+        .strip_suffix(".js")
+        .unwrap_or(filename)
+        .replace('-', " ")
+}
+
+fn list_mod_paths(mods_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(mods_dir) else {
+        return Vec::new();
+    };
+
+    let mut paths: Vec<_> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[tauri::command]
+fn list_mods(app: AppHandle, state: tauri::State<RwLock<Settings>>) -> Result<Vec<ModInfo>, String> {
+    let dir = mods_dir(&app).ok_or_else(|| "config directory unavailable".to_string())?;
+    ensure_bundled_mods(&dir);
+
+    let disabled: std::collections::HashSet<String> = state
+        .read()
+        .unwrap()
+        .disabled_mods
+        .iter()
+        .cloned()
+        .collect();
+
+    let mut mods = Vec::new();
+    for path in list_mod_paths(&dir) {
+        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let source = std::fs::read_to_string(&path).unwrap_or_default();
+        mods.push(ModInfo {
+            filename: filename.to_string(),
+            label: mod_display_name(filename, &source),
+            enabled: !disabled.contains(filename),
+        });
+    }
+    Ok(mods)
+}
+
+fn load_mod_scripts(app: &AppHandle, disabled_mods: &[String]) -> String {
+    let mut scripts = String::new();
+    let Some(mods_dir) = mods_dir(app) else {
+        return scripts;
+    };
+    ensure_bundled_mods(&mods_dir);
+
+    let disabled: std::collections::HashSet<&str> =
+        disabled_mods.iter().map(String::as_str).collect();
+
+    for path in list_mod_paths(&mods_dir) {
+        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if disabled.contains(filename) {
+            println!("skipped mod (disabled): {}", path.display());
+            continue;
+        }
+
+        match std::fs::read_to_string(&path) {
+            Ok(code) => {
+                println!("loaded mod: {}", path.display());
+                scripts.push_str("\n;\n");
+                scripts.push_str(&code);
+            }
+            Err(err) => eprintln!("failed to read mod {}: {err}", path.display()),
+        }
+    }
+    scripts
 }
 
 fn open_settings_window(app: &AppHandle) -> Result<(), String> {
@@ -217,7 +336,7 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("settings.html".into()),
     )
     .title("SpeakiRPG Settings")
-    .inner_size(460.0, 680.0)
+    .inner_size(460.0, 720.0)
     .resizable(false)
     .center();
 
@@ -259,37 +378,6 @@ fn schedule_open_settings(app: &AppHandle) {
 fn open_settings(app: AppHandle) -> Result<(), String> {
     schedule_open_settings(&app);
     Ok(())
-}
-
-fn load_mod_scripts(app: &AppHandle) -> String {
-    let mut scripts = String::new();
-    let Ok(config_dir) = app.path().app_config_dir() else {
-        return scripts;
-    };
-
-    let mods_dir = config_dir.join("mods");
-    let Ok(entries) = std::fs::read_dir(&mods_dir) else {
-        return scripts; // no mods folder yet
-    };
-
-    let mut paths: Vec<_> = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
-        .collect();
-    paths.sort(); // stable mod load order
-
-    for path in paths {
-        match std::fs::read_to_string(&path) {
-            Ok(code) => {
-                println!("loaded mod: {}", path.display());
-                scripts.push_str("\n;\n");
-                scripts.push_str(&code);
-            }
-            Err(err) => eprintln!("failed to read mod {}: {err}", path.display()),
-        }
-    }
-    scripts
 }
 
 struct DiscordRpc {
@@ -525,7 +613,8 @@ fn main() {
             get_settings,
             set_settings,
             open_mods_folder,
-            open_settings
+            open_settings,
+            list_mods
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
@@ -543,7 +632,7 @@ fn main() {
             // WebviewWindowBuilder only: init order is settings snapshot, inject.js, mods
             let settings_json = serde_json::to_string(&settings)
                 .unwrap_or_else(|_| "{}".into());
-            let mods = load_mod_scripts(&app_handle);
+            let mods = load_mod_scripts(&app_handle, &settings.disabled_mods);
 
             let window = WebviewWindowBuilder::new(
                 app,

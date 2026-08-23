@@ -57,6 +57,19 @@ Settings window or `settings.json` in the app config dir:
 | `translateTarget` | `"ru"` | Target language (ISO code) |
 | `translateEnabled` | `true` | Chat translation on/off |
 | `translateOwn` | `false` | Translate your own messages |
+| `translateProvider` | `"mymemory"` | `mymemory`, `gtx`, or `custom` |
+| `translateEndpoint` | `""` | Custom GET/POST URL (`{text}`, `{target}`, `{api_key}`) |
+| `translateJsonPath` | `""` | Dot path into JSON response for custom provider |
+| `translateApiKey` | `""` | MyMemory email or `{api_key}` for custom |
+| `translatePostBody` | `""` | Optional JSON POST body template for custom |
+
+**Built-in providers**
+
+- **mymemory** - free shared API; optional `translateApiKey` (your email) raises daily quota per user.
+- **gtx** - unofficial Google endpoint (same idea as the Chrome widget). May return HTTP 429.
+- **custom** - your URL or local service (LibreTranslate, Ollama, etc.). Example GET: `https://api.mymemory.translated.net/get?q={text}&langpair=autodetect|{target}`. Example POST body for a JSON API: `{"q":"{text}","target":"{target}"}` with `translateJsonPath` set to the result field.
+
+**Local SLM (Ollama):** [English](docs/ollama-translation.en.md) · [Russian](docs/ollama-translation.md)
 
 ### Mods
 
@@ -67,7 +80,7 @@ Put `.js` files in `<config dir>/mods/`. Loaded after the built-in script, sorte
 | Member | Description |
 |--------|-------------|
 | `version` | Client version |
-| `settings` | `{ translateTarget, translateEnabled, translateOwn }` |
+| `settings` | `{ translateTarget, translateEnabled, translateOwn, translateProvider, ... }` |
 | `on('chat', cb)` | `cb({ sender, text, isMine, isSystem }, row)` |
 | `on('stats', cb)` | `cb({ playerName, level, exp, location })` |
 | `on('settings', cb)` | `cb(settings)` on change |

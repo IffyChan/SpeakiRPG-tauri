@@ -206,7 +206,9 @@ fn open_mods_folder(app: AppHandle) -> Result<(), String> {
 
 fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
-        return window.set_focus().map_err(|e| e.to_string());
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
     }
 
     let mut builder = WebviewWindowBuilder::new(
@@ -225,7 +227,16 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-    builder.build().map(|_| ()).map_err(|e| e.to_string())
+    let settings_window = builder.build().map_err(|e| e.to_string())?;
+    let hide_handle = settings_window.clone();
+    settings_window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            // destroy leaves a blank webview on Windows; hide and reuse on next open
+            api.prevent_close();
+            let _ = hide_handle.hide();
+        }
+    });
+    Ok(())
 }
 
 // window create must run on the main thread. Shortcut handlers also run there;

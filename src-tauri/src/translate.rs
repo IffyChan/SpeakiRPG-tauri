@@ -185,7 +185,7 @@ impl Translator {
 
         let post_body = config.post_body.trim();
         let response = if post_body.is_empty() {
-            let url = apply_template(endpoint, text, &config.target, &config.api_key)?;
+            let url = apply_url_template(endpoint, text, &config.target, &config.api_key)?;
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Err("translateEndpoint must start with http:// or https://".into());
             }
@@ -195,11 +195,11 @@ impl Translator {
                 .await
                 .map_err(|e| format!("custom translate request failed: {e}"))?
         } else {
-            let url = apply_template(endpoint, text, &config.target, &config.api_key)?;
+            let url = apply_url_template(endpoint, text, &config.target, &config.api_key)?;
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Err("translateEndpoint must start with http:// or https://".into());
             }
-            let body = apply_template(post_body, text, &config.target, &config.api_key)?;
+            let body = apply_json_template(post_body, text, &config.target, &config.api_key)?;
             self.client
                 .post(url)
                 .header("Content-Type", "application/json")
@@ -222,15 +222,28 @@ impl Translator {
     }
 }
 
-fn apply_template(template: &str, text: &str, target: &str, api_key: &str) -> Result<String, String> {
+fn apply_url_template(template: &str, text: &str, target: &str, api_key: &str) -> Result<String, String> {
     Ok(template
-        .replace("{text}", &encode_component(text))
-        .replace("{target}", &encode_component(target))
+        .replace("{text}", &encode_query_component(text))
+        .replace("{target}", &encode_query_component(target))
         .replace("{source}", "auto")
-        .replace("{api_key}", &encode_component(api_key)))
+        .replace("{api_key}", &encode_query_component(api_key)))
 }
 
-fn encode_component(value: &str) -> String {
+fn apply_json_template(template: &str, text: &str, target: &str, api_key: &str) -> Result<String, String> {
+    Ok(template
+        .replace("{text}", &json_string_fragment(text))
+        .replace("{target}", &json_string_fragment(target))
+        .replace("{source}", "auto")
+        .replace("{api_key}", &json_string_fragment(api_key)))
+}
+
+fn json_string_fragment(value: &str) -> String {
+    let encoded = serde_json::to_string(value).expect("json string encode");
+    encoded[1..encoded.len() - 1].to_string()
+}
+
+fn encode_query_component(value: &str) -> String {
     value
         .bytes()
         .flat_map(|byte| match byte {
@@ -298,5 +311,40 @@ fn extract_json_path(value: &Value, path: &str) -> Option<String> {
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(flag) => Some(flag.to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_template_encodes_spaces_as_plus() {
+        let url = apply_url_template(
+            "http://127.0.0.1:5000/translate?q={text}&to={target}",
+            "hello test",
+            "ru",
+            "",
+        )
+        .unwrap();
+        assert_eq!(url, "http://127.0.0.1:5000/translate?q=hello+test&to=ru");
+    }
+
+    #[test]
+    fn json_template_keeps_spaces_literal() {
+        let body = apply_json_template(
+            r#"{"content":"Translate: {text}"}"#,
+            "hello test",
+            "ru",
+            "",
+        )
+        .unwrap();
+        assert_eq!(body, r#"{"content":"Translate: hello test"}"#);
+    }
+
+    #[test]
+    fn json_template_escapes_quotes() {
+        let body = apply_json_template(r#"{"q":"{text}"}"#, r#"say "hi""#, "en", "").unwrap();
+        assert_eq!(body, r#"{"q":"say \"hi\""}"#);
     }
 }

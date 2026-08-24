@@ -27,7 +27,9 @@ initialization_script, in order:
   4. bundled example mods (from the .exe via include_str!)
 ```
 
-User mods (`speakihax-lite.js`, etc.) are read from `<config dir>/mods/` on **every page load** (F5), not baked into the `.exe`. After editing a user mod, F5 is enough — no full app restart.
+User mods (`my-overlay.js`, etc.) are read from `<config dir>/mods/` on **every page load** (F5), not baked into the `.exe`. After editing a user mod, F5 is enough — no full app restart.
+
+**Porting an existing userscript or browser mod?** See [adapting-mods.md](adapting-mods.md).
 
 Scripts run in the game page context, not in `settings.html`. On cold start the local splash (`index.html`) waits for hooks + user mods before opening the game site. Disable/enable in Settings applies after reload (`F5` on the game page).
 
@@ -38,7 +40,7 @@ Scripts run in the game page context, not in `settings.html`. On cold start the 
 
 On first run the client also copies those files into `<config dir>/mods/` if missing (for editing). Loading uses the in-exe copy, not the folder duplicate.
 
-**User mods** (`skinchanger.js`, bots, etc.) live only in `<config dir>/mods/`. They are read at runtime and are not packed into the GitHub release binary.
+**User mods** (`theme-tweaks.js`, overlays, etc.) live only in `<config dir>/mods/`. They are read at runtime and are not packed into the GitHub release binary.
 
 Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 
@@ -100,7 +102,7 @@ SpeakiRPG.whenGameState((gs) => {
 SpeakiRPG.bootGameStateMod('my-mod', (gs) => { /* ... */ });
 ```
 
-Can break on game updates (`SpeakiRPG.gameStateStatus === 'patch_failed'`). Maintainer notes: `docs/secret/gamestate.md`.
+Can break on game updates (`SpeakiRPG.gameStateStatus === 'patch_failed'`). See [adapting-mods.md](adapting-mods.md) for porting notes.
 
 ### `SpeakiRPG.selectors`
 
@@ -307,7 +309,7 @@ Doesn't work: emote picker in the DOM. Without capture: no direct game client. A
 | RU chat shows target `en` | turn on translation, Cyrillic passes through as-is when target is `ru`/`uk` |
 | RU text + `(hello)` | that's a translated line, brackets hold the original |
 | `gameStateStatus` stays `disabled` | enable capture in Settings, F5 |
-| `patch_failed` after game update | see `docs/secret/gamestate.md` (manual breakpoint fallback) |
+| `patch_failed` after game update | gameState capture may need a client update; try DOM-based APIs or open an issue |
 | `whenGameState` never runs | log in after capture; wait until status is `ready` |
 
 **Hotkeys**

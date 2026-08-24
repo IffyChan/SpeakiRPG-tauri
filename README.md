@@ -69,7 +69,8 @@ Local SLM setup with Ollama: [English](docs/ollama-translation.en.md) / [Russian
 
 Drop `.js` files into `<config dir>/mods/`. They load after the built-in script, sorted by filename, and each one can be toggled in Settings (reload with F5 to apply). On first run the client copies in the bundled examples (`example-highlight.js`, `example-emotes.js`) if they're not already there.
 
-Full guide: [docs/mods.md](docs/mods.md).
+- API reference: [docs/mods.md](docs/mods.md)
+- Porting userscripts / other clients: [docs/adapting-mods.md](docs/adapting-mods.md)
 
 `window.SpeakiRPG` API, quick reference:
 

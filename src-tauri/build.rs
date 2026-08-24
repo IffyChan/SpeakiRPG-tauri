@@ -11,6 +11,7 @@ fn main() {
                     "open_mods_folder",
                     "open_settings",
                     "list_mods",
+                    "get_user_mod_scripts",
                 ]),
             ),
     )

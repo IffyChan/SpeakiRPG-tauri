@@ -77,11 +77,52 @@
     return absolutizeViteImports(withPatchMarker(code));
   }
 
+  function extractI18nId(source) {
+    const m = source.match(
+      /function (\w+)\(e\)\s*\{\s*let \w+\s*=\s*\w+\[\w+\(\)\];\s*return Object\.prototype\.hasOwnProperty\.call\(\w+,\s*e\)\s*\?\s*\w+\[e\]\s*:/,
+    );
+    return m ? m[1] : null;
+  }
+
+  function extractQuestManagerId(source) {
+    const m = source.match(
+      /new\s*(\w+)\(\{\s*container:\s*e,\s*showToast:\s*e\s*=>\s*\w+\.setStatus\(e\),\s*onClaimSuccess:\s*\(\)\s*=>\s*\{\s*\w+\.markStale\(\),\s*\w+\.markStale\(\),\s*\w+\(\)\s*}/,
+    );
+    return m ? m[1] : null;
+  }
+
+  function buildCapturePrefix(recv, i18n, questManager) {
+    const parts = [`window.gameState=${recv}`];
+    if (i18n && i18n !== 'null') parts.push(`window.i18n=${i18n}`);
+    if (questManager && questManager !== 'null') {
+      parts.push(`window.questManager=${questManager}`);
+    }
+    return parts.join(',');
+  }
+
+  function spliceConnectPatch(source, abs, original, recv, i18n, questManager) {
+    const prefix = buildCapturePrefix(recv, i18n, questManager);
+    const patched = `${prefix},${original}`;
+    return source.slice(0, abs) + patched + source.slice(abs + original.length);
+  }
+
+  function tryPatchConnectSite(source, abs, original, recv, i18n, questManager) {
+    if (recv === 'socket' || recv === 'WebSocket') return null;
+    const code = spliceConnectPatch(source, abs, original, recv, i18n, questManager);
+    if (code.includes('window.gameState=')) {
+      return finalizePatchedBundle(code);
+    }
+    return null;
+  }
+
   function patchIndexBundle(source) {
     const anchorHits = ANCHORS.filter((a) => source.includes(a));
     if (anchorHits.length < 2) {
       return { ok: false, reason: `anchors found: ${anchorHits.length}/2` };
     }
+
+    const i18n = extractI18nId(source);
+    const questManager = extractQuestManagerId(source);
 
     const primaryRe =
       /([\w$]+)\.connect\(([\w$]+)\),[sc]n\(\(\)=>\{[an]n\(\)\.autoAttackEnabled\|\|/;
@@ -90,13 +131,8 @@
       const recv = primary[1];
       const original = primary[0];
       const abs = primary.index;
-      const code =
-        source.slice(0, abs) +
-        `window.gameState=${recv},${original}` +
-        source.slice(abs + original.length);
-      if (code.includes('window.gameState=')) {
-        return { ok: true, code: finalizePatchedBundle(code) };
-      }
+      const code = tryPatchConnectSite(source, abs, original, recv, i18n, questManager);
+      if (code) return { ok: true, code };
     }
 
     const legacyRe =
@@ -105,13 +141,25 @@
     if (legacy) {
       const recv = legacy[2];
       const arg = legacy[3];
+      const prefix = buildCapturePrefix(recv, i18n, questManager);
       const code = source.replace(
         legacyRe,
-        `$1(window.gameState=${recv},${recv}.connect(${arg})),$4`,
+        `$1(${prefix},${recv}.connect(${arg})),$4`,
       );
       if (code.includes('window.gameState=')) {
         return { ok: true, code: finalizePatchedBundle(code) };
       }
+    }
+
+    const electronRe =
+      /;\s*(([\w$]+)\.connect\(([\w$]+)\)),([^;]{0,96}autoAttackEnabled)/;
+    const electron = source.match(electronRe);
+    if (electron) {
+      const recv = electron[2];
+      const original = electron[1];
+      const abs = electron.index + electron[0].indexOf(original);
+      const code = tryPatchConnectSite(source, abs, original, recv, i18n, questManager);
+      if (code) return { ok: true, code };
     }
 
     const combatPos = source.indexOf('combatAssist');
@@ -120,17 +168,11 @@
       const fallbackRe = /([\w$]+)\.connect\(([\w$]+)\)/g;
       let match;
       while ((match = fallbackRe.exec(tail))) {
-        if (match[1] === 'socket' || match[1] === 'WebSocket') continue;
         const recv = match[1];
-        const arg = match[2];
         const original = match[0];
         const abs = combatPos + match.index;
-        const patched = `window.gameState=${recv},${original}`;
-        const code =
-          source.slice(0, abs) + patched + source.slice(abs + original.length);
-        if (code.includes('window.gameState=')) {
-          return { ok: true, code: finalizePatchedBundle(code) };
-        }
+        const code = tryPatchConnectSite(source, abs, original, recv, i18n, questManager);
+        if (code) return { ok: true, code };
       }
     }
 

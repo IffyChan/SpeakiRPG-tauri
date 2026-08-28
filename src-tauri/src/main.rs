@@ -314,7 +314,7 @@ fn settings_bootstrap_script(settings: &Settings) -> String {
   try {{
     var raw = sessionStorage.getItem('__SPEAKI_SETTINGS__');
     if (raw) live = Object.assign({{}}, embedded, JSON.parse(raw));
-    sessionStorage.removeItem('__speaki_capture_reload');
+    sessionStorage.removeItem('__speaki_gs_reload');
   }} catch (e) {{}}
   window.__SPEAKI_SETTINGS__ = live;
   window.__SPEAKI_DISABLED_MODS = new Set(live.disabledMods || []);

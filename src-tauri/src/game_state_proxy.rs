@@ -106,6 +106,77 @@ mod imp {
         absolutize_vite_imports(&with_patch_marker(source))
     }
 
+    fn extract_i18n_id(source: &str) -> Option<String> {
+        let re = Regex::new(
+            r"function (\w+)\(e\)\s*\{\s*let \w+\s*=\s*\w+\[\w+\(\)\];\s*return Object\.prototype\.hasOwnProperty\.call\(\w+,\s*e\)\s*\?\s*\w+\[e\]\s*:",
+        )
+        .ok()?;
+        re.captures(source)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+    }
+
+    fn extract_quest_manager_id(source: &str) -> Option<String> {
+        let re = Regex::new(
+            r"new\s*(\w+)\(\{\s*container:\s*e,\s*showToast:\s*e\s*=>\s*\w+\.setStatus\(e\),\s*onClaimSuccess:\s*\(\)\s*=>\s*\{\s*\w+\.markStale\(\),\s*\w+\.markStale\(\),\s*\w+\(\)\s*}",
+        )
+        .ok()?;
+        re.captures(source)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+    }
+
+    fn build_capture_prefix(recv: &str, i18n: Option<&str>, quest_manager: Option<&str>) -> String {
+        let mut parts = vec![format!("window.gameState={recv}")];
+        if let Some(id) = i18n {
+            if id != "null" {
+                parts.push(format!("window.i18n={id}"));
+            }
+        }
+        if let Some(id) = quest_manager {
+            if id != "null" {
+                parts.push(format!("window.questManager={id}"));
+            }
+        }
+        parts.join(",")
+    }
+
+    fn splice_connect_patch(
+        source: &str,
+        abs: usize,
+        original: &str,
+        recv: &str,
+        i18n: Option<&str>,
+        quest_manager: Option<&str>,
+    ) -> String {
+        let prefix = build_capture_prefix(recv, i18n, quest_manager);
+        let patched = format!("{prefix},{original}");
+        let mut code = String::with_capacity(source.len() + patched.len());
+        code.push_str(&source[..abs]);
+        code.push_str(&patched);
+        code.push_str(&source[abs + original.len()..]);
+        code
+    }
+
+    fn try_patch_connect_site(
+        source: &str,
+        abs: usize,
+        original: &str,
+        recv: &str,
+        i18n: Option<&str>,
+        quest_manager: Option<&str>,
+    ) -> Option<String> {
+        if recv == "socket" || recv == "WebSocket" {
+            return None;
+        }
+        let code = splice_connect_patch(source, abs, original, recv, i18n, quest_manager);
+        if code.contains("window.gameState=") {
+            Some(finalize_patched_bundle(code))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn patch_index_bundle(source: &str) -> std::result::Result<String, String> {
         const ANCHORS: &[&str] = &[
             "targetMonsterId",
@@ -118,6 +189,11 @@ mod imp {
             return Err(format!("anchors found: {hits}/2"));
         }
 
+        let i18n = extract_i18n_id(source);
+        let quest_manager = extract_quest_manager_id(source);
+        let i18n_ref = i18n.as_deref();
+        let quest_ref = quest_manager.as_deref();
+
         let primary = Regex::new(
             r"([\w$]+)\.connect\(([\w$]+)\),[sc]n\(\(\)=>\{[an]n\(\)\.autoAttackEnabled\|\|",
         )
@@ -126,16 +202,45 @@ mod imp {
         if let Some(caps) = primary.captures(source) {
             let recv = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let original = caps.get(0).map(|m| m.as_str()).unwrap_or("");
-            // comma expression, not wrapped in parens — closing ")" would break
-            // `autoAttackEnabled||k.stopAutoAttack()` after the anchor
-            let patched = format!("window.gameState={recv},{original}");
             let abs = caps.get(0).unwrap().start();
-            let mut code = String::with_capacity(source.len() + patched.len());
-            code.push_str(&source[..abs]);
-            code.push_str(&patched);
-            code.push_str(&source[abs + original.len()..]);
-            if code.contains("window.gameState=") {
-                return Ok(finalize_patched_bundle(code));
+            if let Some(code) = try_patch_connect_site(source, abs, original, recv, i18n_ref, quest_ref)
+            {
+                return Ok(code);
+            }
+        }
+
+        if let Ok(legacy) = Regex::new(
+            r"(\}\);)([\w$]+)\.connect\(([\w$]+)\),([sc]n\(\(\)=>\{[an]n\(\)\.autoAttackEnabled\|\|)",
+        ) {
+            if let Some(caps) = legacy.captures(source) {
+                let recv = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let arg = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                let prefix = build_capture_prefix(recv, i18n_ref, quest_ref);
+                let replacement = format!("$1({prefix},{recv}.connect({arg})),$4");
+                let code = legacy.replace(source, replacement.as_str()).into_owned();
+                if code.contains("window.gameState=") {
+                    return Ok(finalize_patched_bundle(code));
+                }
+            }
+        }
+
+        if let Ok(electron) = Regex::new(
+            r";\s*(([\w$]+)\.connect\(([\w$]+)\)),([^;]{0,96}autoAttackEnabled)",
+        ) {
+            if let Some(caps) = electron.captures(source) {
+                let recv = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let original = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let connect_abs = caps.get(1).unwrap().start();
+                if let Some(code) = try_patch_connect_site(
+                    source,
+                    connect_abs,
+                    original,
+                    recv,
+                    i18n_ref,
+                    quest_ref,
+                ) {
+                    return Ok(code);
+                }
             }
         }
 
@@ -148,18 +253,12 @@ mod imp {
 
         for caps in connect_re.captures_iter(tail) {
             let recv = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            if recv == "socket" || recv == "WebSocket" {
-                continue;
-            }
             let original = caps.get(0).map(|m| m.as_str()).unwrap_or("");
             let abs = combat_pos + caps.get(0).unwrap().start();
-            let patched = format!("window.gameState={recv},{original}");
-            let mut code = String::with_capacity(source.len() + patched.len());
-            code.push_str(&source[..abs]);
-            code.push_str(&patched);
-            code.push_str(&source[abs + original.len()..]);
-            if code.contains("window.gameState=") {
-                return Ok(finalize_patched_bundle(code));
+            if let Some(code) =
+                try_patch_connect_site(source, abs, original, recv, i18n_ref, quest_ref)
+            {
+                return Ok(code);
             }
         }
 
@@ -377,8 +476,18 @@ mod imp {
         fn patch_new_bundle_anchor() {
             let src = "combatAssist;targetMonsterId;});k.connect(t)})()}});k.connect(g),cn(()=>{nn().autoAttackEnabled||k.stopAutoAttack()});";
             let patched = super::patch_index_bundle(src).expect("patch new anchor");
-            assert!(patched.contains("window.gameState=k,k.connect(g)"));
+            assert!(patched.contains("window.gameState=k,"));
+            assert!(patched.contains("k.connect(g)"));
             assert!(!patched.contains("autoAttackEnabled||)"));
+        }
+
+        #[test]
+        fn patch_electron_fallback_without_primary() {
+            let src = "combatAssist;targetMonsterId;socket.connect(ws);k.connect(g),middleStuff,cn(()=>{nn().autoAttackEnabled||k.stopAutoAttack()});";
+            let patched = super::patch_index_bundle(src).expect("electron fallback");
+            assert!(patched.contains("window.gameState=k,"));
+            assert!(patched.contains("k.connect(g)"));
+            assert!(!patched.contains("window.gameState=socket"));
         }
 
         #[test]
@@ -390,9 +499,24 @@ mod imp {
             }
             let src = std::fs::read_to_string(path).expect("read bundle");
             let patched = patch_index_bundle(&src).expect("patch bundle");
-            assert!(patched.contains("window.gameState="));
-            assert!(patched.contains("window.gameState=k,k.connect(g)"));
+            assert!(patched.contains("window.gameState=k,"));
+            assert!(patched.contains("k.connect(g)"));
             assert!(!patched.contains("window.gameState=k,k.connect(t)"));
+            assert!(!patched.contains("autoAttackEnabled||)"));
+        }
+
+        #[test]
+        fn patch_speakimod_bundle() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../SpeakiMod/index-B0GpIacT.js");
+            if !path.exists() {
+                return;
+            }
+            let src = std::fs::read_to_string(path).expect("read bundle");
+            let patched = patch_index_bundle(&src).expect("patch bundle");
+            assert!(patched.contains("window.gameState=k,"));
+            assert!(patched.contains("k.connect(g)"));
+            assert!(!patched.contains("k.connect(t),cn"));
             assert!(!patched.contains("autoAttackEnabled||)"));
             assert!(patched.contains("__SPEAKI_GS_PATCHED__"));
         }

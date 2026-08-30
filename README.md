@@ -97,6 +97,18 @@ Drop `.js` files into `<config dir>/mods/`. They load after the built-in script,
 
 The default build uses a shared `CLIENT_ID` in `src-tauri/src/main.rs`. For your own release, make an app in the [Discord Developer Portal](https://discord.com/developers/applications) and swap it in.
 
+## Troubleshooting
+
+**Blurry after maximizing / resizing (Linux, Wayland).** Known WebKitGTK limitation ([wry#1727](https://github.com/tauri-apps/wry/issues/1727)): after a window resize the GPU compositor renders text/UI tiles at fractional pixel coordinates, so the page looks soft. It persists through reloads and goes away at the size the window started with. Not fixable from the client; the client remembers its last size/maximized state (`window-state.json`) and reopens that way, so the common launch-then-maximize path no longer resizes the webview - but resizing an open window can still trigger it. Other workarounds:
+
+- run the app under XWayland: `GDK_BACKEND=x11 speaki-rpg` (X11 is not affected);
+- keep the display scale at 100% or an integer value (fractional scaling has separate DPI quirks: [tauri#9264](https://github.com/tauri-apps/tauri/issues/9264));
+- do **not** use `WEBKIT_DISABLE_COMPOSITING_MODE=1` — it fixes the blur but drops rendering to a few FPS.
+
+**Lower FPS than the Electron client (Linux).** The Linux build renders through WebKitGTK, whose WebGL/compositing path is slower than Chromium's (what Electron uses). GPU-heavy effects like cell shading lose more FPS there - that gap is a platform difference, not client overhead. Client-side CPU overhead was reduced in the current build (observer/tick throttling); avoid running both clients side by side when comparing, they share one GPU.
+
+**Blurry on Windows with 125/150% display scaling.** WebView2 has known DPI quirks at fractional scale factors ([tauri#1074](https://github.com/tauri-apps/tauri/issues/1074)). Try setting 100% scaling, or override DPI behavior per-app in Windows compatibility settings.
+
 ## License
 
 GPL-3.0, see [LICENSE](LICENSE).

@@ -18,6 +18,7 @@ mod translate;
 mod game_state_proxy;
 mod mod_settings;
 mod session;
+mod window_state;
 
 use mod_settings::{default_mod_values, parse_mod_settings_schema, ModSettingsSchema};
 
@@ -816,6 +817,17 @@ fn main() {
             .center()
             // runs on every navigation; inject.js pushes to Rust (eval can't return DOM)
             .initialization_script(settings_bootstrap_script(&settings));
+
+            // recreate at the last size/maximized state: the webview is then
+            // created at its final size, dodging the Wayland resize blur
+            if let Some(state) = window_state::load(&app_handle) {
+                if state.maximized {
+                    window_builder = window_builder.maximized(true);
+                } else {
+                    window_builder = window_builder.inner_size(state.width, state.height);
+                }
+            }
+
             #[cfg(windows)]
             {
                 window_builder = window_builder.initialization_script(
@@ -851,6 +863,8 @@ fn main() {
                 WindowEvent::Focused(false) => {
                     let _ = app_handle.global_shortcut().unregister_all();
                 }
+                // capture while the window still exists; Exit is too late
+                WindowEvent::CloseRequested { .. } => window_state::persist(&app_handle),
                 _ => {}
             });
 

@@ -3526,7 +3526,7 @@ dependencies = [
 
 [[package]]
 name = "speakirpg"
-version = "1.0.4"
+version = "1.0.7+1"
 dependencies = [
  "discord-rich-presence",
  "rand 0.8.7",

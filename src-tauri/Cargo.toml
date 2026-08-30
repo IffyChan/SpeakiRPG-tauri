@@ -1,6 +1,6 @@
 [package]
 name = "speakirpg"
-version = "1.0.4"
+version = "1.0.7+1"
 description = "Speaki RPG Desktop Client with Discord Rich Presence"
 authors = ["IffyChan"]
 license = "GPL-3.0"

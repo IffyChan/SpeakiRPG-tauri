@@ -1,7 +1,7 @@
 {
   "name": "speakirpg",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.7+1",
   "description": "Speaki RPG Desktop Client (Tauri 2) with Discord Rich Presence integration",
   "author": "IffyChan",
   "scripts": {

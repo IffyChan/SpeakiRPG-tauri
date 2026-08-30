@@ -234,8 +234,34 @@ SpeakiRPG.on('settings', (settings) => {
 - Prefer MIT/GPL-compatible licensing if you publish on GitHub.
 - Link users to [mods.md](mods.md) for the API and to this file for installation.
 
+## Mod settings in the desktop client
+
+Declare a `/* SpeakiRPG.settings { ... } */` block in your mod file (see [mods.md](mods.md)). The client parses it when listing mods and builds the Settings UI automatically. You do **not** edit `settings.html`.
+
+```js
+SpeakiRPG.on('settings', () => {
+  const cfg = SpeakiRPG.getModSettings('my-mod');
+});
+
+SpeakiRPG.on('modAction', ({ modId, action }) => {
+  if (modId !== 'my-mod') return;
+  if (action === 'refresh') { /* ... */ }
+});
+```
+
+## Porting third-party gameState mods
+
+If you have a browser userscript that expects `window.gameState` at load time:
+
+1. Enable **Expose game client** in Settings, then **F5**.
+2. Copy the script into your mods folder as a `.js` file.
+3. Move all `gameState` access inside `SpeakiRPG.bootGameStateMod('my-mod', (gs) => { ... })`.
+4. Remove any injector that patches `handleLogin` or loads extra scripts from the web — the desktop client already captures `gameState` when capture is on.
+
+Bundled **Game tools** (`game-tools.js`) ships QoL with the native Settings schema, minimap strips (status, EXP ETA, channels, quest pin), zone walk, and spectate. Mods that need the same REST endpoints can read the JWT from `gameState.socket.socket.url` after capture is on (see [mods.md](mods.md)).
+
 ## See also
 
 - [mods.md](mods.md) — full API, events, selectors, examples
 - [README.md](../README.md) — install, shortcuts, config paths
-- Bundled samples in `src-tauri/mods/` in the repository (`example-highlight.js`, `example-emotes.js`)
+- Bundled samples in `src-tauri/mods/` in the repository (`example-highlight.js`, `example-emotes.js`, `game-tools.js`)

@@ -27,7 +27,7 @@ npm run build    # installer -> src-tauri/target/release/bundle/
 
 ## Usage
 
-Run the app and log in on the game site (the splash redirects automatically). Discord shows your name, level, XP and location from the character card, ~30s after load and then every 5 min - Discord needs to be running for that to work. Korean/Japanese chat lines get translated in place when you turn it on in Settings, with the original text kept in muted brackets. Toggle with `Ctrl+Shift+T` or from Settings (`Ctrl+Shift+S` / gear button bottom-right).
+Run the app and log in on the game site (the splash redirects automatically). Discord shows your name, level, XP and location from the character card, ~30s after load and then every 5 min - Discord needs to be running for that to work. Korean/Japanese chat lines get translated in place when you turn it on in Settings, with the original text kept in muted brackets. Toggle with `Ctrl+Shift+T` or from Settings (`Ctrl+Shift+S` / gear button bottom-right). Use **Account → Switch account** in Settings to sign out of the game site (clears game cookies and site storage; `settings.json` and mods are kept) and log in with another account.
 
 ## Shortcuts
 

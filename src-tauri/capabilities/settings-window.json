@@ -8,6 +8,8 @@
       "allow-get-settings",
       "allow-set-settings",
       "allow-open-mods-folder",
-      "allow-list-mods"
+      "allow-list-mods",
+      "allow-mod-action",
+      "allow-switch-account"
     ]
   }

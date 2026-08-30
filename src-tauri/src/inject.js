@@ -13,6 +13,7 @@
     translateEnabled: false,
     translateOwn: false,
     captureGameState: false,
+    modSettings: {},
     ...(window.__SPEAKI_SETTINGS__ || {}),
   };
 
@@ -40,6 +41,7 @@
     dialog: [],
     emote: [],
     gameStateReady: [],
+    modAction: [],
   };
 
   const SELECTORS = Object.freeze({
@@ -55,6 +57,7 @@
     playerExp: '.sr-player-card__exp-track',
     playerRevive: '.sr-player-card__revive-pill',
     playerHp: '.sr-hp-gauge__value',
+    minimapFrame: '.sr-minimap-frame',
     minimapCaption: '.sr-minimap-frame__caption',
     targetFrame: '.sr-target-frame',
     targetName: '.sr-target-frame__name',
@@ -200,6 +203,16 @@
     listMonsterNames() {
       return gameStateBridge ? gameStateBridge.listMonsterNames() : [];
     },
+    getModSettings(modId) {
+      const bag = settings.modSettings || {};
+      return modId ? { ...(bag[modId] || {}) } : { ...bag };
+    },
+    getI18n() {
+      return typeof window.i18n === 'function' ? window.i18n : null;
+    },
+    getQuestManager() {
+      return window.questManager ?? null;
+    },
   };
 
   // selectors from Electron capturePageStats()
@@ -293,15 +306,26 @@
       if (root.__srObserved === eventName) return;
       root.__srObserved = eventName;
       let last = '';
+      let flushQueued = false;
       const push = () => {
+        flushQueued = false;
         const data = readFn(root);
         const key = JSON.stringify(data);
         if (key === last) return;
         last = key;
         emitTo(eventName, data, root);
       };
+      const queuePush = () => {
+        // combat mutates the card every tick; skip the read+stringify entirely
+        // while nothing listens, and coalesce bursts to one read per frame
+        if (!listeners[eventName].length || flushQueued) return;
+        flushQueued = true;
+        // rAF stalls while hidden, fall back to a slow timer
+        if (document.hidden) setTimeout(push, 500);
+        else requestAnimationFrame(push);
+      };
       push();
-      new MutationObserver(push).observe(root, {
+      new MutationObserver(queuePush).observe(root, {
         subtree: true,
         childList: true,
         characterData: true,
@@ -427,7 +451,18 @@
       lastTranslationAt = Date.now();
       try {
         const translated = await window.__TAURI__.core.invoke('translate_text', { text });
-        if (translated) translationMemory.set(cacheKey, translated);
+        if (translated) {
+          translationMemory.set(cacheKey, translated);
+          // bound memory on long sessions; Map keeps insertion order
+          if (translationMemory.size > 2000) {
+            const drop = translationMemory.size - 2000;
+            let dropped = 0;
+            for (const key of translationMemory.keys()) {
+              if (dropped++ >= drop) break;
+              translationMemory.delete(key);
+            }
+          }
+        }
         return translated;
       } catch (err) {
         const message = String(err);
@@ -620,6 +655,67 @@
       });
   }
 
+  function clearGameStorageKeepSpeakiSettings() {
+    const speaki = sessionStorage.getItem('__SPEAKI_SETTINGS__');
+    try {
+      localStorage.clear();
+    } catch (_) {}
+    try {
+      sessionStorage.clear();
+      if (speaki) sessionStorage.setItem('__SPEAKI_SETTINGS__', speaki);
+    } catch (_) {}
+    if (typeof indexedDB?.databases === 'function') {
+      return indexedDB.databases().then((dbs) =>
+        Promise.all(
+          (dbs || []).map((db) => (db?.name ? indexedDB.deleteDatabase(db.name) : Promise.resolve())),
+        ),
+      );
+    }
+    return Promise.resolve();
+  }
+
+  function accountSwitchUrlFlag() {
+    try {
+      return new URLSearchParams(window.location.search).has('speaki_logout');
+    } catch {
+      return false;
+    }
+  }
+
+  function stripAccountSwitchUrl() {
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('speaki_logout')) return;
+      url.searchParams.delete('speaki_logout');
+      const next = url.pathname + (url.search || '') + url.hash;
+      window.history.replaceState(null, '', next || '/');
+    } catch {
+      /* optional */
+    }
+  }
+
+  function maybeFinishAccountSwitch() {
+    if (!window.__TAURI__ || !isGamePage()) return Promise.resolve(false);
+    const urlFlag = accountSwitchUrlFlag();
+    console.log('[SpeakiRPG] account switch: checking pending/url flag', { urlFlag });
+    return window.__TAURI__.core
+      .invoke('take_account_switch_pending')
+      .then((pending) => {
+        if (!pending && !urlFlag) return false;
+        console.log('[SpeakiRPG] account switch: clearing game storage', { pending, urlFlag });
+        stripAccountSwitchUrl();
+        return clearGameStorageKeepSpeakiSettings().then(() => {
+          console.log('[SpeakiRPG] account switch: reloading clean game URL');
+          window.location.replace(GAME_URL);
+          return true;
+        });
+      })
+      .catch((err) => {
+        console.error('[SpeakiRPG] account switch failed:', err);
+        return false;
+      });
+  }
+
   function maybeReloadForMissedPatch() {
     if (!isGamePage() || !settings.captureGameState) return;
     setTimeout(() => {
@@ -649,13 +745,17 @@
     onTauriReady(() => {
       if (!isGamePage()) setBootStatus('Loading mods…');
 
-      loadUserMods()
-        .then(() => waitGameStateProxyReady())
-        .then(() => {
-          if (!isGamePage()) {
-            setBootStatus('Opening game…');
-            openGamePage();
-          }
+      maybeFinishAccountSwitch()
+        .then((switched) => {
+          if (switched) return;
+          return loadUserMods()
+            .then(() => waitGameStateProxyReady())
+            .then(() => {
+              if (!isGamePage()) {
+                setBootStatus('Opening game…');
+                openGamePage();
+              }
+            });
         });
     });
 
@@ -685,6 +785,11 @@
 
     window.__TAURI__.event.listen('gamestate-index-patched', () => {
       window.__speakiGsOnNativePatch?.();
+    });
+
+    window.__TAURI__.event.listen('mod-action', (event) => {
+      const payload = event.payload || {};
+      emitTo('modAction', payload);
     });
 
     window.__TAURI__.event.listen('settings-changed', (event) => {

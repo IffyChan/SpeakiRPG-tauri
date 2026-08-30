@@ -42,16 +42,19 @@ pub struct Translator {
     cache: Mutex<HashMap<String, String>>,
 }
 
+// bound memory on long chat sessions
+const TRANSLATE_CACHE_MAX: usize = 2000;
+
 impl Translator {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
-            .expect("failed to build HTTP client");
-        Self {
+            .map_err(|e| format!("failed to build translate HTTP client: {e}"))?;
+        Ok(Self {
             client,
             cache: Mutex::new(HashMap::new()),
-        }
+        })
     }
 
     pub async fn translate(&self, text: &str, config: &TranslateConfig) -> Result<String, String> {
@@ -75,10 +78,11 @@ impl Translator {
             other => return Err(format!("unknown translate provider: {other}")),
         };
 
-        self.cache
-            .lock()
-            .unwrap()
-            .insert(cache_key, translated.clone());
+        let mut cache = self.cache.lock().unwrap();
+        if cache.len() >= TRANSLATE_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(cache_key, translated.clone());
 
         Ok(translated)
     }
@@ -232,15 +236,15 @@ fn apply_url_template(template: &str, text: &str, target: &str, api_key: &str) -
 
 fn apply_json_template(template: &str, text: &str, target: &str, api_key: &str) -> Result<String, String> {
     Ok(template
-        .replace("{text}", &json_string_fragment(text))
-        .replace("{target}", &json_string_fragment(target))
+        .replace("{text}", &json_string_fragment(text)?)
+        .replace("{target}", &json_string_fragment(target)?)
         .replace("{source}", "auto")
-        .replace("{api_key}", &json_string_fragment(api_key)))
+        .replace("{api_key}", &json_string_fragment(api_key)?))
 }
 
-fn json_string_fragment(value: &str) -> String {
-    let encoded = serde_json::to_string(value).expect("json string encode");
-    encoded[1..encoded.len() - 1].to_string()
+fn json_string_fragment(value: &str) -> Result<String, String> {
+    let encoded = serde_json::to_string(value).map_err(|e| e.to_string())?;
+    Ok(encoded[1..encoded.len() - 1].to_string())
 }
 
 fn encode_query_component(value: &str) -> String {
@@ -251,13 +255,7 @@ fn encode_query_component(value: &str) -> String {
                 vec![byte as char]
             }
             b' ' => vec!['+'],
-            _ => {
-                let mut out = Vec::with_capacity(3);
-                out.push('%');
-                out.push(hex(byte >> 4));
-                out.push(hex(byte & 0x0f));
-                out
-            }
+            _ => vec!['%', hex(byte >> 4), hex(byte & 0x0f)],
         })
         .collect()
 }

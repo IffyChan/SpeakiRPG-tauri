@@ -12,6 +12,9 @@ fn main() {
                     "open_settings",
                     "list_mods",
                     "get_user_mod_scripts",
+                    "mod_action",
+                    "switch_account",
+                    "take_account_switch_pending",
                 ]),
             ),
     )

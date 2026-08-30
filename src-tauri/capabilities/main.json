@@ -11,6 +11,7 @@
     "allow-update-stats",
     "allow-translate-text",
     "allow-open-settings",
-    "allow-get-user-mod-scripts"
+    "allow-get-user-mod-scripts",
+    "allow-take-account-switch-pending"
   ]
 }

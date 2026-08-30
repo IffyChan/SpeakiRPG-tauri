@@ -9,12 +9,17 @@ use std::{
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 
 mod translate;
 mod game_state_proxy;
+mod mod_settings;
+mod session;
+
+use mod_settings::{default_mod_values, parse_mod_settings_schema, ModSettingsSchema};
 
 use translate::{TranslateConfig, Translator};
 
@@ -65,6 +70,8 @@ pub struct Settings {
     pub capture_game_state: bool,
     #[serde(default)]
     pub disabled_mods: Vec<String>,
+    #[serde(default)]
+    pub mod_settings: Map<String, Value>,
 }
 
 impl Default for Settings {
@@ -80,6 +87,7 @@ impl Default for Settings {
             translate_post_body: String::new(),
             capture_game_state: false,
             disabled_mods: Vec::new(),
+            mod_settings: Map::new(),
         }
     }
 }
@@ -162,7 +170,8 @@ fn get_settings(state: tauri::State<RwLock<Settings>>) -> Settings {
     state.read().unwrap().clone()
 }
 
-#[tauri::command]
+// (async): disk write + window eval stay off the main thread
+#[tauri::command(async)]
 fn set_settings(
     app: AppHandle,
     state: tauri::State<RwLock<Settings>>,
@@ -205,7 +214,8 @@ fn set_settings(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+// (async): writes bundled mod files to disk before opening the folder
+#[tauri::command(async)]
 fn open_mods_folder(app: AppHandle) -> Result<(), String> {
     let dir = mods_dir(&app).ok_or_else(|| "config directory unavailable".to_string())?;
     ensure_bundled_mods(&dir);
@@ -220,6 +230,15 @@ struct ModInfo {
     filename: String,
     label: String,
     enabled: bool,
+    settings_schema: Option<ModSettingsSchema>,
+    settings_values: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModActionRequest {
+    mod_id: String,
+    action: String,
 }
 
 fn mods_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -232,6 +251,7 @@ fn mods_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
 const BUNDLED_MODS: &[(&str, &str)] = &[
     ("example-highlight.js", include_str!("../mods/example-highlight.js")),
     ("example-emotes.js", include_str!("../mods/example-emotes.js")),
+    ("game-tools.js", include_str!("../mods/game-tools.js")),
 ];
 
 fn ensure_bundled_mods(mods_dir: &std::path::Path) {
@@ -240,9 +260,6 @@ fn ensure_bundled_mods(mods_dir: &std::path::Path) {
     }
     for (name, content) in BUNDLED_MODS {
         let path = mods_dir.join(name);
-        if path.exists() {
-            continue;
-        }
         let _ = std::fs::write(path, content);
     }
 }
@@ -277,7 +294,8 @@ fn list_mod_paths(mods_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     paths
 }
 
-#[tauri::command]
+// (async): reads every mod file from disk
+#[tauri::command(async)]
 fn list_mods(app: AppHandle, state: tauri::State<RwLock<Settings>>) -> Result<Vec<ModInfo>, String> {
     let dir = mods_dir(&app).ok_or_else(|| "config directory unavailable".to_string())?;
     ensure_bundled_mods(&dir);
@@ -296,10 +314,29 @@ fn list_mods(app: AppHandle, state: tauri::State<RwLock<Settings>>) -> Result<Ve
             continue;
         };
         let source = std::fs::read_to_string(&path).unwrap_or_default();
+        let schema = parse_mod_settings_schema(&source);
+        let values = if let Some(ref sch) = schema {
+            let mut values = state
+                .read()
+                .unwrap()
+                .mod_settings
+                .get(&sch.id)
+                .and_then(|v| v.as_object().cloned())
+                .unwrap_or_default();
+            let defaults = default_mod_values(sch);
+            for (key, value) in defaults {
+                values.entry(key).or_insert(value);
+            }
+            values
+        } else {
+            Map::new()
+        };
         mods.push(ModInfo {
             filename: filename.to_string(),
             label: mod_display_name(filename, &source),
             enabled: !disabled.contains(filename),
+            settings_schema: schema,
+            settings_values: values,
         });
     }
     Ok(mods)
@@ -314,7 +351,8 @@ fn settings_bootstrap_script(settings: &Settings) -> String {
   try {{
     var raw = sessionStorage.getItem('__SPEAKI_SETTINGS__');
     if (raw) live = Object.assign({{}}, embedded, JSON.parse(raw));
-    sessionStorage.removeItem('__speaki_gs_reload');
+    // __speaki_gs_reload is NOT cleared here: it caps maybeReloadForMissedPatch
+    // at one retry; capture clears it in onIndexPatched on a successful patch
   }} catch (e) {{}}
   window.__SPEAKI_SETTINGS__ = live;
   window.__SPEAKI_DISABLED_MODS = new Set(live.disabledMods || []);
@@ -400,6 +438,23 @@ fn load_user_mod_scripts(app: &AppHandle) -> String {
 }
 
 #[tauri::command]
+fn mod_action(app: AppHandle, request: ModActionRequest) -> Result<(), String> {
+    if request.mod_id.trim().is_empty() || request.action.trim().is_empty() {
+        return Err("modId and action required".into());
+    }
+    app.emit_to(
+        "main",
+        "mod-action",
+        serde_json::json!({
+            "modId": request.mod_id,
+            "action": request.action,
+        }),
+    )
+    .map_err(|e| e.to_string())
+}
+
+// (async): runs on every page load and reads every user mod file
+#[tauri::command(async)]
 fn get_user_mod_scripts(app: AppHandle) -> String {
     load_user_mod_scripts(&app)
 }
@@ -459,6 +514,36 @@ fn schedule_open_settings(app: &AppHandle) {
 fn open_settings(app: AppHandle) -> Result<(), String> {
     schedule_open_settings(&app);
     Ok(())
+}
+
+fn drain_account_switch_pending(pending: &Mutex<bool>) -> bool {
+    let mut flag = pending.lock().unwrap();
+    let value = *flag;
+    *flag = false;
+    value
+}
+
+// (async): session clear sleeps 200ms waiting for the WebView2 storage clear
+#[tauri::command(async)]
+fn switch_account(app: AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    session::clear_game_session(&window)?;
+    *state.account_switch_pending.lock().unwrap() = true;
+    let ts = now_millis();
+    window
+        .eval(format!("window.location.href='{GAME_URL}?speaki_logout={ts}'"))
+        .map_err(|e| {
+            *state.account_switch_pending.lock().unwrap() = false;
+            e.to_string()
+        })?;
+    Ok(())
+}
+
+#[tauri::command]
+fn take_account_switch_pending(state: tauri::State<AppState>) -> bool {
+    drain_account_switch_pending(&state.account_switch_pending)
 }
 
 struct DiscordRpc {
@@ -559,6 +644,7 @@ struct AppState {
     last_update_ms: Mutex<u64>,
     // Electron rpcTimestamp
     session_start_ms: u64,
+    account_switch_pending: Mutex<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -579,7 +665,8 @@ impl PageStats {
     }
 }
 
-#[tauri::command]
+// (async): Discord pipe I/O must not block the main thread when Discord is slow
+#[tauri::command(async)]
 fn update_stats(state: tauri::State<AppState>, stats: PageStats, manual: bool) {
     if stats.is_empty() {
         // no player card yet, ignore
@@ -696,19 +783,24 @@ fn main() {
             open_mods_folder,
             open_settings,
             list_mods,
-            get_user_mod_scripts
+            get_user_mod_scripts,
+            mod_action,
+            switch_account,
+            take_account_switch_pending
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
 
             let settings = load_settings(&app_handle);
             app.manage(RwLock::new(settings.clone()));
-            app.manage(Translator::new());
+            let translator = Translator::new()?;
+            app.manage(translator);
 
             app.manage(AppState {
                 rpc: Mutex::new(DiscordRpc::new()),
                 last_update_ms: Mutex::new(0),
                 session_start_ms: now_millis(),
+                account_switch_pending: Mutex::new(false),
             });
 
             // init: settings bootstrap, capture, inject, bundled examples only; user mods via get_user_mod_scripts
@@ -777,4 +869,24 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod account_switch_tests {
+    use super::drain_account_switch_pending;
+    use std::sync::Mutex;
+
+    #[test]
+    fn pending_flag_is_read_once_and_cleared() {
+        let pending = Mutex::new(true);
+        assert!(drain_account_switch_pending(&pending));
+        assert!(!drain_account_switch_pending(&pending));
+    }
+
+    #[test]
+    fn pending_flag_stays_false_when_never_set() {
+        let pending = Mutex::new(false);
+        assert!(!drain_account_switch_pending(&pending));
+        assert!(!drain_account_switch_pending(&pending));
+    }
 }

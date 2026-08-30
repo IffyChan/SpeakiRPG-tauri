@@ -9,7 +9,7 @@ No schema, so we work it out:
 1. DevTools in the game window (`F12` -> Elements). Game classes use the `sr-` prefix.
 2. `MutationObserver` in `inject.js` on chat, player card, target bar, NPC dialog.
 3. The Electron port for stats selectors: [DJTOMATO/SpeakiRPG](https://github.com/DJTOMATO/SpeakiRPG).
-4. Offline dumps (maintainers only, `docs/secret/`, gitignored) for grepping minified JS.
+4. Offline dumps for grepping minified JS.
 5. Updates break things - prefer `SpeakiRPG.on` / `get*` over hardcoded selectors.
 
 Found a stable selector? PR it into `SpeakiRPG.selectors` or add an event in `inject.js`.
@@ -37,6 +37,7 @@ Scripts run in the game page context, not in `settings.html`. On cold start the 
 
 - `example-highlight.js` - yellow row when chat mentions your name
 - `example-emotes.js` - sample `clickEmoteSlot()` usage
+- `game-tools.js` - QoL utilities (status strip, camera, emotes, portal walk) with Settings schema
 
 On first run the client also copies those files into `<config dir>/mods/` if missing (for editing). Loading uses the in-exe copy, not the folder duplicate.
 
@@ -69,6 +70,8 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 - `isGameStateReady()` - boolean
 - `whenGameState(cb)` - run when `gameState` is available (see Advanced)
 - `bootGameStateMod(name, init)` - same, but waits for `document.body` (for HUD mods)
+- `getModSettings(modId)` - per-mod values from Settings (`modSettings`); omit `modId` for the full map
+- `getI18n()` / `getQuestManager()` - helpers when capture patch exposed them, else `null`
 - `listMonsterNames()` - mob names from `gameState` when ready, else `[]`
 - `on(event, cb)` - subscribe, returns `unsubscribe()`
 
@@ -84,6 +87,7 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 | `stats` | Discord stats tick (~30s, 5min, `Ctrl+Shift+D`) | `(stats)` |
 | `settings` | client settings changed | `(settings)` |
 | `gameStateReady` | game client captured (capture on) | `(gameState)` |
+| `modAction` | Settings action button for a mod schema | `({ modId, action })` |
 
 `player` / `target` / `dialog` use live observers. `stats` follows the Discord poll schedule - use `player` if you want a fresh name/level.
 
@@ -91,7 +95,7 @@ Enable/disable per file in Settings (`disabledMods` in `settings.json`).
 
 Off by default. **Settings → Developer → Expose game client to mods**, then **F5**.
 
-The client patches `/assets/index-*.js` on load so `window.gameState` exists (same as the SpeakiMod DevTools breakpoint). Mods must defer:
+The client patches `/assets/index-*.js` on load so `window.gameState` exists (same idea as a manual DevTools breakpoint on socket connect). Mods must defer:
 
 ```js
 SpeakiRPG.whenGameState((gs) => {
@@ -122,6 +126,7 @@ Confirmed against DOM dumps (Aug 2026). Use these instead of copying strings aro
 | `playerExp` | `.sr-player-card__exp-track` |
 | `playerRevive` | `.sr-player-card__revive-pill` |
 | `playerHp` | `.sr-hp-gauge__value` |
+| `minimapFrame` | `.sr-minimap-frame` |
 | `minimapCaption` | `.sr-minimap-frame__caption` |
 | `targetFrame` | `.sr-target-frame` |
 | `targetName` | `.sr-target-frame__name` |
@@ -154,8 +159,6 @@ The hotbar smiley (`.sr-emote-slot`) does the same thing as that keybind when cl
 `.sr-potion-popover` is for potions, empty in our dumps.
 
 `on('emote')` only looks at chat (emoji-only lines etc.) - it doesn't fire for character animations in the world.
-
-More detail (bundle grep, wire ids) in `docs/secret/dom-audit-body2.md` (gitignored).
 
 ---
 
@@ -275,6 +278,53 @@ for (const slot of slots) {
 
 No built-in skill/cast observers - poll if you need it, or PR an `on('skill')`.
 
+## Mod settings schema (Settings window)
+
+Mods can declare a JSON schema in a block comment (parsed from disk, not executed). When present, fields show under **Mod settings** in the Settings window, grouped by `category`. Values persist in `settings.json` as `modSettings[modId]`.
+
+```js
+// SpeakiRPG mod: My mod
+/* SpeakiRPG.settings
+{
+  "id": "my-mod",
+  "category": "UI",
+  "fields": [
+    { "key": "enabled", "type": "bool", "label": "Feature on", "default": true },
+    { "key": "scale", "type": "number", "label": "Scale", "min": 0.5, "max": 2, "default": 1 },
+    { "key": "refresh", "type": "action", "label": "Refresh now", "action": "refresh" }
+  ]
+}
+*/
+```
+
+Field types: `bool`, `number`, `text`, `select`, `action`. Read values with `SpeakiRPG.getModSettings('my-mod')` and react to `SpeakiRPG.on('settings', ...)`. For `action` buttons, listen to `SpeakiRPG.on('modAction', ({ modId, action }) => { ... })`.
+
+```js
+{ "key": "mode", "type": "select", "label": "Mode", "default": "a",
+  "options": [
+    { "value": "a", "label": "Option A" },
+    { "value": "b", "label": "Option B" }
+  ]
+}
+{ "key": "note", "type": "text", "label": "Custom label", "default": "" }
+```
+
+The Settings window has search across client sections and mod categories. Mods without a schema only appear in the enable/disable list.
+
+Bundled **game-tools** (`src-tauri/mods/game-tools.js`) includes:
+
+- **Minimap strips** (stacked above the legend): nearby players, exp/min, zone name; optional zone ID; EXP time-to-level; channel population (`GET /api/realtime/channels` with JWT from the game socket URL).
+- **Walk to zone** — `select` for ring zones 1–10; portal routing with session cache (see below).
+- **Quest pin** — Pin button on incomplete quests in the quest list; progress bar under the minimap; polls `GET /api/quests?period=…`.
+- **Spectate** — text field + **Watch player** action (camera follows; **Reset camera** returns to self).
+- Camera lock, view clip, nametags, zoom, emotes, spin.
+
+Requires **Expose game client to mods** and **F5** after changing mod settings. Quest pin also needs `questManager` capture (enabled with gameState capture).
+
+Zone walk routes along the main world ring, learns portal positions from `gameState.findNearbyPortal()` into a session cache, and falls back to a compact edge hint table when a hop is not cached yet.
+
+**REST from a mod:** JWT is available from `gameState.socket.socket.url` (same pattern as game-tools). Use `Authorization: Bearer …` against `https://sr1.overture.io.kr`. No public `getAuthToken()` helper yet.
+
 ---
 
 ## Writing a mod
@@ -324,6 +374,5 @@ Doesn't work: emote picker in the DOM. Without capture: no direct game client. A
 - `src-tauri/src/game-state-capture.js` - opt-in gameState fetch patch
 - `src-tauri/src/main.rs` - mods, settings window
 - `src-tauri/mods/example-*.js` - bundled samples
-- `docs/secret/` - gitignored dumps + `dom-audit-body2.md`
 
-New UI element? Add the selector in `inject.js`, a `get*`/`on` if it changes, and a row in this file. Bundle/HTML notes go in `docs/secret/`.
+New UI element? Add the selector in `inject.js`, a `get*`/`on` if it changes, and a row in this file.

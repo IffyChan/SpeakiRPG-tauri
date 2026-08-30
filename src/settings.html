@@ -155,6 +155,15 @@
             background: #354055;
         }
 
+        button.danger {
+            border-color: #8a3a3a;
+            background: #3a2428;
+        }
+
+        button.danger:hover {
+            background: #4a2c32;
+        }
+
         #status {
             position: fixed;
             right: 16px;
@@ -168,6 +177,85 @@
         #status.error {
             color: #e07a7a;
         }
+
+        .search-wrap {
+            margin-bottom: 16px;
+        }
+
+        .search-wrap input {
+            width: 100%;
+            padding: 8px 12px;
+            font: inherit;
+            color: inherit;
+            background: #262b36;
+            border: 1px solid #3a4150;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+
+        section.hidden-by-search {
+            display: none;
+        }
+
+        .mod-settings-group {
+            margin-bottom: 16px;
+        }
+
+        .mod-settings-group h3 {
+            margin: 0 0 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #b8c0cc;
+        }
+
+        .mod-settings-card {
+            margin-bottom: 12px;
+            padding: 10px 12px;
+            background: #262b36;
+            border: 1px solid #323845;
+            border-radius: 6px;
+        }
+
+        .mod-settings-card.disabled-mod {
+            opacity: 0.45;
+            pointer-events: none;
+        }
+
+        .mod-settings-card h4 {
+            margin: 0 0 8px;
+            font-size: 13px;
+            color: #e8ecf2;
+        }
+
+        .field-row {
+            margin-bottom: 10px;
+        }
+
+        .field-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .field-row label {
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+
+        .field-row input[type="number"] {
+            width: 100%;
+            margin-top: 4px;
+            padding: 6px 8px;
+            font: inherit;
+            color: inherit;
+            background: #1e222b;
+            border: 1px solid #3a4150;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+
+        .action-btn {
+            margin-top: 4px;
+            width: 100%;
+        }
     </style>
 </head>
 
@@ -175,7 +263,21 @@
     <h1>SpeakiRPG</h1>
     <p class="version">Settings apply instantly, no restart needed</p>
 
-    <section>
+    <div class="search-wrap">
+        <input type="search" id="settingsSearch" placeholder="Search settings, mods, categories…" autocomplete="off">
+    </div>
+
+    <section data-settings-section data-category="Client" data-keywords="account login logout switch sign out">
+        <h2>Account</h2>
+        <p class="hint" style="margin: 0 0 10px;">
+            Sign out of the <strong>game site</strong> session and return to the login screen so you can
+            sign in with a <strong>different</strong> account. Clears game cookies and site storage;
+            client settings and mods are kept. Restricted or banned accounts stay restricted after logout.
+        </p>
+        <button type="button" id="switchAccount" class="danger">Switch account</button>
+    </section>
+
+    <section data-settings-section data-category="Client" data-keywords="chat translation translate language">
         <h2>Chat translation</h2>
         <label>
             Translate into
@@ -195,7 +297,7 @@
         </p>
     </section>
 
-    <section>
+    <section data-settings-section data-category="Client" data-keywords="translation api mymemory google custom endpoint">
         <h2>Translation API</h2>
         <label>
             Provider
@@ -246,7 +348,7 @@
         </div>
     </section>
 
-    <section>
+    <section data-settings-section data-category="Client" data-keywords="developer gamestate capture expose client mods advanced">
         <h2>Developer</h2>
         <label class="check">
             <input type="checkbox" id="captureGameState">
@@ -258,7 +360,13 @@
         </p>
     </section>
 
-    <section>
+    <section id="modSettingsHost" data-settings-section data-category="Mods" data-keywords="mod settings configuration">
+        <h2>Mod settings</h2>
+        <div id="modSettingsPanels"></div>
+        <p class="hint" id="modSettingsEmpty" style="margin:0">Enable a mod with a settings schema to see options here.</p>
+    </section>
+
+    <section data-settings-section data-category="Client" data-keywords="mods scripts enable disable folder">
         <h2>Mods</h2>
         <p class="hint" style="margin: 0 0 10px;">
             Small scripts that hook chat, stats, and translation. See
@@ -297,6 +405,7 @@
         const $ = (id) => document.getElementById(id);
         let statusTimer = null;
         let cachedSettings = null;
+        let cachedMods = [];
 
         function escapeHtml(text) {
             return String(text)
@@ -332,16 +441,18 @@
         }
 
         async function refreshModList() {
-            const mods = await window.__TAURI__.core.invoke('list_mods');
+            cachedMods = await window.__TAURI__.core.invoke('list_mods');
             const list = $('modList');
-            if (!mods.length) {
+            if (!cachedMods.length) {
                 list.innerHTML = '<p class="hint" style="margin:0">No mods yet.</p>';
+                renderModSettingsPanels();
+                applySearchFilter();
                 return;
             }
-            list.innerHTML = mods
+            list.innerHTML = cachedMods
                 .map(
                     (mod) => `
-                <label class="check mod-row">
+                <label class="check mod-row" data-mod-label="${escapeHtml(mod.label)}" data-mod-file="${escapeHtml(mod.filename)}">
                     <input type="checkbox" data-mod-file="${escapeHtml(mod.filename)}" ${
                         mod.enabled ? 'checked' : ''
                     }>
@@ -352,6 +463,145 @@
                 </label>`
                 )
                 .join('');
+            renderModSettingsPanels();
+            applySearchFilter();
+        }
+
+        function getModSettingsMap() {
+            return { ...(cachedSettings?.modSettings || {}) };
+        }
+
+        function modValues(mod) {
+            return { ...(mod.settingsValues || {}) };
+        }
+
+        function renderModSettingsPanels() {
+            const host = $('modSettingsPanels');
+            const empty = $('modSettingsEmpty');
+            const withSchema = cachedMods.filter((m) => m.settingsSchema);
+            if (!withSchema.length) {
+                host.innerHTML = '';
+                empty.style.display = 'block';
+                return;
+            }
+            empty.style.display = 'none';
+
+            const byCategory = new Map();
+            for (const mod of withSchema) {
+                const cat = mod.settingsSchema.category || 'Mods';
+                if (!byCategory.has(cat)) byCategory.set(cat, []);
+                byCategory.get(cat).push(mod);
+            }
+
+            const categories = [...byCategory.keys()].sort((a, b) => a.localeCompare(b));
+            host.innerHTML = categories
+                .map((category) => {
+                    const mods = byCategory.get(category);
+                    const cards = mods
+                        .map((mod) => {
+                            const sch = mod.settingsSchema;
+                            const disabled = !mod.enabled;
+                            const fields = (sch.fields || [])
+                                .map((field) => {
+                                    const val = modValues(mod)[field.key];
+                                    const keywords = `${mod.label} ${category} ${field.label} ${field.key}`;
+                                    if (field.type === 'bool') {
+                                        const checked = !!val;
+                                        return `
+                    <label class="check field-row" data-field-keywords="${escapeHtml(keywords)}">
+                        <input type="checkbox" data-mod-id="${escapeHtml(sch.id)}" data-field-key="${escapeHtml(field.key)}" data-field-type="bool" ${checked ? 'checked' : ''}>
+                        <span>${escapeHtml(field.label)}</span>
+                    </label>`;
+                                    }
+                                    if (field.type === 'number') {
+                                        const num = Number(val ?? field.default ?? 0);
+                                        const min = field.min != null ? ` min="${field.min}"` : '';
+                                        const max = field.max != null ? ` max="${field.max}"` : '';
+                                        return `
+                    <div class="field-row" data-field-keywords="${escapeHtml(keywords)}">
+                        <label>${escapeHtml(field.label)}
+                            <input type="number"${min}${max} data-mod-id="${escapeHtml(sch.id)}" data-field-key="${escapeHtml(field.key)}" data-field-type="number" value="${Number.isFinite(num) ? num : 0}">
+                        </label>
+                    </div>`;
+                                    }
+                                    if (field.type === 'text') {
+                                        const textVal = val != null ? String(val) : String(field.default ?? '');
+                                        return `
+                    <div class="field-row" data-field-keywords="${escapeHtml(keywords)}">
+                        <label>${escapeHtml(field.label)}
+                            <input type="text" data-mod-id="${escapeHtml(sch.id)}" data-field-key="${escapeHtml(field.key)}" data-field-type="text" value="${escapeHtml(textVal)}">
+                        </label>
+                    </div>`;
+                                    }
+                                    if (field.type === 'select') {
+                                        const options = field.options || [];
+                                        const selected = val != null ? String(val) : String(field.default ?? '');
+                                        const opts = options
+                                            .map((opt) => {
+                                                const v = String(opt.value ?? '');
+                                                const sel = v === selected ? ' selected' : '';
+                                                return `<option value="${escapeHtml(v)}"${sel}>${escapeHtml(opt.label ?? v)}</option>`;
+                                            })
+                                            .join('');
+                                        return `
+                    <div class="field-row" data-field-keywords="${escapeHtml(keywords)}">
+                        <label>${escapeHtml(field.label)}
+                            <select data-mod-id="${escapeHtml(sch.id)}" data-field-key="${escapeHtml(field.key)}" data-field-type="select">${opts}</select>
+                        </label>
+                    </div>`;
+                                    }
+                                    if (field.type === 'action') {
+                                        const action = field.action || field.key;
+                                        return `
+                    <div class="field-row" data-field-keywords="${escapeHtml(keywords)}">
+                        <button type="button" class="action-btn" data-mod-id="${escapeHtml(sch.id)}" data-mod-action="${escapeHtml(action)}">${escapeHtml(field.label)}</button>
+                    </div>`;
+                                    }
+                                    return '';
+                                })
+                                .join('');
+                            return `
+                <div class="mod-settings-card${disabled ? ' disabled-mod' : ''}" data-mod-label="${escapeHtml(mod.label)}" data-mod-category="${escapeHtml(category)}">
+                    <h4>${escapeHtml(mod.label)}</h4>
+                    ${fields}
+                </div>`;
+                        })
+                        .join('');
+                    return `
+            <div class="mod-settings-group" data-settings-section data-category="${escapeHtml(category)}" data-keywords="${escapeHtml(category)} mod settings">
+                <h3>${escapeHtml(category)}</h3>
+                ${cards}
+            </div>`;
+                })
+                .join('');
+        }
+
+        async function setModField(modId, key, value) {
+            const modSettings = getModSettingsMap();
+            modSettings[modId] = { ...(modSettings[modId] || {}), [key]: value };
+            await save({ modSettings });
+            const mod = cachedMods.find((m) => m.settingsSchema?.id === modId);
+            if (mod) {
+                mod.settingsValues = { ...mod.settingsValues, [key]: value };
+            }
+        }
+
+        function applySearchFilter() {
+            const q = ($('settingsSearch').value || '').trim().toLowerCase();
+            document.querySelectorAll('[data-settings-section]').forEach((section) => {
+                if (!q) {
+                    section.classList.remove('hidden-by-search');
+                    return;
+                }
+                const keywords = (section.dataset.keywords || '').toLowerCase();
+                const category = (section.dataset.category || '').toLowerCase();
+                const text = section.textContent.toLowerCase();
+                const match =
+                    keywords.includes(q) ||
+                    category.includes(q) ||
+                    text.includes(q);
+                section.classList.toggle('hidden-by-search', !match);
+            });
         }
 
         function buildSettings(overrides = {}) {
@@ -372,6 +622,7 @@
                 translatePostBody: $('postBody').value,
                 captureGameState: $('captureGameState').checked,
                 disabledMods: cachedSettings?.disabledMods ?? [],
+                modSettings: cachedSettings?.modSettings ?? {},
                 ...overrides,
             };
         }
@@ -434,11 +685,72 @@
             }
         });
 
+        $('switchAccount').addEventListener('click', async () => {
+            if (!confirm('Sign out of the game and return to the login screen?')) return;
+            status('signing out…');
+            try {
+                await window.__TAURI__.core.invoke('switch_account');
+                status('signed out — check the game window for the login screen');
+            } catch (err) {
+                status(String(err), true);
+            }
+        });
+
         $('modList').addEventListener('change', (event) => {
             const input = event.target;
             if (!(input instanceof HTMLInputElement) || !input.dataset.modFile) return;
             setModEnabled(input.dataset.modFile, input.checked);
         });
+
+        $('modSettingsPanels').addEventListener('change', (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement) || !input.dataset.modId) return;
+            const modId = input.dataset.modId;
+            const key = input.dataset.fieldKey;
+            if (input.dataset.fieldType === 'bool') {
+                setModField(modId, key, input.checked);
+            }
+        });
+
+        $('modSettingsPanels').addEventListener('change', (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement) || input.type !== 'number') return;
+            if (!input.dataset.modId) return;
+            const value = Number(input.value);
+            setModField(input.dataset.modId, input.dataset.fieldKey, Number.isFinite(value) ? value : 0);
+        });
+
+        $('modSettingsPanels').addEventListener('change', (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement) || input.type !== 'text') return;
+            if (!input.dataset.modId || input.dataset.fieldType !== 'text') return;
+            setModField(input.dataset.modId, input.dataset.fieldKey, input.value);
+        });
+
+        $('modSettingsPanels').addEventListener('change', (event) => {
+            const el = event.target;
+            if (!(el instanceof HTMLSelectElement) || !el.dataset.modId) return;
+            if (el.dataset.fieldType !== 'select') return;
+            setModField(el.dataset.modId, el.dataset.fieldKey, el.value);
+        });
+
+        $('modSettingsPanels').addEventListener('click', async (event) => {
+            const btn = event.target;
+            if (!(btn instanceof HTMLButtonElement) || !btn.dataset.modAction) return;
+            try {
+                await window.__TAURI__.core.invoke('mod_action', {
+                    request: {
+                        modId: btn.dataset.modId,
+                        action: btn.dataset.modAction,
+                    },
+                });
+                status('sent');
+            } catch (err) {
+                status(String(err), true);
+            }
+        });
+
+        $('settingsSearch').addEventListener('input', applySearchFilter);
 
         // keep in sync with hotkey toggles happening in the game window
         function onTauriReady(fn) {

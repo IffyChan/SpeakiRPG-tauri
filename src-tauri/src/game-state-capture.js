@@ -28,6 +28,10 @@
     if (fromNative) state.nativePatchSeen = true;
     else state.scriptHookPatchSeen = true;
     setCaptureStatus('patched');
+    // patch recovered; give future failures a fresh one-shot reload budget
+    try {
+      sessionStorage.removeItem('__speaki_gs_reload');
+    } catch (_) {}
     startReadyPoll();
   }
 
